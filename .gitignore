@@ -1,0 +1,53 @@
+# Experiment and simulation results
+results/
+simulations/results/
+simulations/sumo_override.ini
+
+# OMNeT++ / Veins build artifacts
+out/
+*.o
+*.d
+*.so
+*.dylib
+*.exe
+src/veins_ros_v2v_ucla
+
+# OMNeT++ output files
+*.sca
+*.vec
+*.vci
+
+# OMNeT++ IDE
+.cproject
+.project
+.settings/
+.oppbuildspec
+.nedexclusions
+.cmdenv-log
+.qtenvrc
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+venv/
+.venv/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ROS 2 build
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Logs
+*.log
+
+# AI tool config
+.claude/
