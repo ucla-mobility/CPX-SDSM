@@ -7,12 +7,12 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <iomanip>
 #include <mutex>
 #include <sstream>
 #include <thread>
 #include <algorithm>
 
-// Directory creation
 #ifdef _WIN32
   #ifndef NOMINMAX
   #define NOMINMAX
@@ -30,7 +30,7 @@
   #endif
   #include <winsock2.h>
   #include <ws2tcpip.h>
-  #include <direct.h>       // _mkdir
+  #include <direct.h>
   typedef SOCKET socket_t;
   static std::atomic<int> g_wsaUsers{0};
 #else
@@ -100,12 +100,11 @@ namespace veins_ros_v2v {
 
 Define_Module(RosSDSMApp);
 
-// Static CSV log handles (shared across all instances)
-std::ofstream* RosSDSMApp::s_aoiLog_ = nullptr;
+// Static CSV log handles
+std::ofstream* RosSDSMApp::s_rxDetailLog_ = nullptr;
+std::atomic<uint64_t> RosSDSMApp::s_rxDetailLogCounter_{0};
 std::ofstream* RosSDSMApp::s_txrxLog_ = nullptr;
-std::ofstream* RosSDSMApp::s_redundancyLog_ = nullptr;
 std::ofstream* RosSDSMApp::s_txLog_ = nullptr;
-std::ofstream* RosSDSMApp::s_rxLog_ = nullptr;
 std::ofstream* RosSDSMApp::s_timeseriesLog_ = nullptr;
 std::ofstream* RosSDSMApp::s_summaryLog_ = nullptr;
 int RosSDSMApp::s_logRefCount_ = 0;
@@ -115,22 +114,24 @@ std::vector<double> RosSDSMApp::s_aoiSamples_;
 uint64_t RosSDSMApp::s_redundantCount_ = 0;
 uint64_t RosSDSMApp::s_redundantTotal_ = 0;
 long RosSDSMApp::s_nextMessageId_ = 0;
+std::ofstream* RosSDSMApp::s_vehicleSummaryLog_ = nullptr;
+bool RosSDSMApp::s_vehicleSummaryHeaderWritten_ = false;
+std::mutex RosSDSMApp::s_vehicleSummaryMtx_;
+std::ofstream* RosSDSMApp::s_rosLogFile_ = nullptr;
+std::mutex RosSDSMApp::s_rosLogMtx_;
+int RosSDSMApp::s_rosLogRefCount_ = 0;
 static int s_maxNodeIndexForMetadata = -1;
 static double s_sendIntervalForMetadata = -1.0;
 
-// Pooled ROS bridge socket (shared across all instances)
 socket_t RosSDSMApp::s_rosSendSocket_ = INVALID_SOCKET;
 std::mutex RosSDSMApp::s_rosSendMtx_;
 sockaddr_in RosSDSMApp::s_rosSendAddr_{};
 bool RosSDSMApp::s_rosSendInitialized_ = false;
 int RosSDSMApp::s_rosSendRefCount_ = 0;
 
-// CSV write buffers
-std::vector<std::string> RosSDSMApp::s_aoiBuffer_;
+std::vector<std::string> RosSDSMApp::s_rxDetailBuffer_;
 std::vector<std::string> RosSDSMApp::s_txrxBuffer_;
-std::vector<std::string> RosSDSMApp::s_redundancyBuffer_;
 std::vector<std::string> RosSDSMApp::s_txBuffer_;
-std::vector<std::string> RosSDSMApp::s_rxBuffer_;
 std::vector<std::string> RosSDSMApp::s_timeseriesBuffer_;
 
 
@@ -146,30 +147,20 @@ void RosSDSMApp::appendToBuffer(std::vector<std::string>& buffer, std::ofstream*
 }
 
 void RosSDSMApp::flushCsvBuffers() {
-    if (s_aoiLog_ && !s_aoiBuffer_.empty()) {
-        for (const auto& row : s_aoiBuffer_) *s_aoiLog_ << row;
-        s_aoiLog_->flush();
-        s_aoiBuffer_.clear();
+    if (s_rxDetailLog_ && !s_rxDetailBuffer_.empty()) {
+        for (const auto& row : s_rxDetailBuffer_) *s_rxDetailLog_ << row;
+        s_rxDetailLog_->flush();
+        s_rxDetailBuffer_.clear();
     }
     if (s_txrxLog_ && !s_txrxBuffer_.empty()) {
         for (const auto& row : s_txrxBuffer_) *s_txrxLog_ << row;
         s_txrxLog_->flush();
         s_txrxBuffer_.clear();
     }
-    if (s_redundancyLog_ && !s_redundancyBuffer_.empty()) {
-        for (const auto& row : s_redundancyBuffer_) *s_redundancyLog_ << row;
-        s_redundancyLog_->flush();
-        s_redundancyBuffer_.clear();
-    }
     if (s_txLog_ && !s_txBuffer_.empty()) {
         for (const auto& row : s_txBuffer_) *s_txLog_ << row;
         s_txLog_->flush();
         s_txBuffer_.clear();
-    }
-    if (s_rxLog_ && !s_rxBuffer_.empty()) {
-        for (const auto& row : s_rxBuffer_) *s_rxLog_ << row;
-        s_rxLog_->flush();
-        s_rxBuffer_.clear();
     }
     if (s_timeseriesLog_ && !s_timeseriesBuffer_.empty()) {
         for (const auto& row : s_timeseriesBuffer_) *s_timeseriesLog_ << row;
@@ -190,13 +181,12 @@ void RosSDSMApp::initRosSendSocket() {
         return;
     }
 
-    // Set socket to non-blocking for sends
-    #ifndef _WIN32
+#ifndef _WIN32
     int flags = fcntl(s_rosSendSocket_, F_GETFL, 0);
     if (flags != -1) {
         fcntl(s_rosSendSocket_, F_SETFL, flags | O_NONBLOCK);
     }
-    #endif
+#endif
 
     s_rosSendAddr_.sin_family = AF_INET;
     s_rosSendAddr_.sin_port = htons(static_cast<uint16_t>(rosRemotePort_));
@@ -226,6 +216,12 @@ void RosSDSMApp::cleanupRosSendSocket() {
 RosSDSMApp::RosSDSMApp() {}
 
 RosSDSMApp::~RosSDSMApp() {
+    // Unsubscribe from PHY CBR signal
+    if (sigChannelBusy_ != 0) {
+        auto* host = findHost();
+        if (host) host->unsubscribe(sigChannelBusy_, this);
+    }
+
     cancelAndDelete(sendTimer_);
     sendTimer_ = nullptr;
     if (timeseriesTimer_) {
@@ -236,8 +232,10 @@ RosSDSMApp::~RosSDSMApp() {
         cancelAndDelete(udpPollTimer_);
         udpPollTimer_ = nullptr;
     }
-    stopUdpListener();
-    cleanupRosSendSocket();
+    if (bridgeMode_ == BridgeMode::Live) {
+        stopUdpListener();
+        cleanupRosSendSocket();
+    }
 }
 
 
@@ -249,14 +247,19 @@ void RosSDSMApp::initialize(int stage) {
         sendTimer_ = new cMessage("sdsmSendTimer");
         sent_ = received_ = 0;
 
+        {
+            std::string modeStr = par("rosBridgeMode").stdstringValue();
+            if (modeStr == "live") bridgeMode_ = BridgeMode::Live;
+            else if (modeStr == "log") bridgeMode_ = BridgeMode::Log;
+            else bridgeMode_ = BridgeMode::Off;
+        }
+
         rosRemoteHost_ = par("rosRemoteHost").stdstringValue();
         rosCmdPortBase_ = par("rosCmdPortBase").intValue();
         rosRemotePort_ = par("rosRemotePort").intValue();
         rosPollInterval_ = par("rosPollInterval");
         periodicEnabled_ = par("periodicEnabled").boolValue();
 
-        // Read rosControlEnabled for NED/ini backward compat but ignore it;
-        // ROS 2 bridge is always on.
         (void)par("rosControlEnabled").boolValue();
 
         greedyEnabled_ = par("greedyEnabled").boolValue();
@@ -267,13 +270,22 @@ void RosSDSMApp::initialize(int stage) {
         greedyW1_ = par("greedyW1").doubleValue();
         greedyW2_ = par("greedyW2").doubleValue();
         greedyW3_ = par("greedyW3").doubleValue();
+        greedyW4_ = par("greedyW4").doubleValue();
         greedyThreshold_ = par("greedyThreshold").doubleValue();
         greedyMinInterval_ = par("greedyMinInterval");
         greedyMaxInterval_ = par("greedyMaxInterval");
         congestionWindow_ = par("congestionWindow");
         redundancyEpsilon_ = par("redundancyEpsilon").doubleValue();
 
+        maxObjectsPerSdsm_ = par("maxObjectsPerSdsm").intValue();
+        if (maxObjectsPerSdsm_ > 16) maxObjectsPerSdsm_ = 16;
+        detectionRange_ = par("detectionRange").doubleValue();
+        detectionMaxAge_ = par("detectionMaxAge").doubleValue();
+
         csvLoggingEnabled_ = par("csvLoggingEnabled").boolValue();
+        txrxLogEnabled_ = par("txrxLogEnabled").boolValue();
+        rxLogEveryNth_ = par("rxLogEveryNth").intValue();
+        if (rxLogEveryNth_ < 1) rxLogEveryNth_ = 1;
         logPrefix_ = par("logPrefix").stdstringValue();
         runNumber_ = par("runNumber").intValue();
         timeseriesSampleInterval_ = par("timeseriesSampleInterval").doubleValue();
@@ -292,13 +304,32 @@ void RosSDSMApp::initialize(int stage) {
         nodeIndex_ = getParentModule() ? getParentModule()->getIndex() : -1;
         localCmdPort_ = rosCmdPortBase_ + std::max(0, nodeIndex_);
 
-        udpPollTimer_ = new cMessage("rosUdpPollTimer");
-        startUdpListener();
-        initRosSendSocket();
+        if (bridgeMode_ == BridgeMode::Live) {
+            udpPollTimer_ = new cMessage("rosUdpPollTimer");
+            startUdpListener();
+            initRosSendSocket();
+        }
+
+        if (bridgeMode_ == BridgeMode::Log) {
+            std::lock_guard<std::mutex> lk(s_rosLogMtx_);
+            s_rosLogRefCount_++;
+            if (!s_rosLogFile_) {
+                ensureDirExists("results");
+                const std::string stem = "results/" + logPrefix_ + "-r" + std::to_string(runNumber_);
+                s_rosLogFile_ = new std::ofstream(stem + "-ros-events.jsonl");
+            }
+        }
+
+        // Subscribe to PHY channel-busy signal for true CBR
+        sigChannelBusy_ = registerSignal("org_car2x_veins_modules_mac_sigChannelBusy");
+        cbrWindowStart_ = simTime();
+        accumulatedBusyTime_ = SIMTIME_ZERO;
+        lastBusyStart_ = SIMTIME_ZERO;
+        channelCurrentlyBusy_ = false;
+        currentCBR_ = 0.0;
     }
 
     if (stage == 1) {
-        // Initialize last-sent state to current position (greedy baseline)
         const auto pos = mobility->getPositionAt(simTime());
         lastSentX_ = pos.x;
         lastSentY_ = pos.y;
@@ -306,24 +337,53 @@ void RosSDSMApp::initialize(int stage) {
         lastSentTime_ = simTime();
         lastSentHeading_ = 0;
 
-        // Schedule first send/tick with random jitter to desynchronize nodes
         scheduleAt(simTime() + uniform(0.1, 0.3), sendTimer_);
 
-        // Start polling for ROS 2 commands and announce ourselves
-        scheduleAt(simTime() + rosPollInterval_, udpPollTimer_);
-        sendToRos("HELLO node=" + std::to_string(nodeIndex_) + " cmd_port=" + std::to_string(localCmdPort_));
+        if (bridgeMode_ == BridgeMode::Live) {
+            scheduleAt(simTime() + rosPollInterval_, udpPollTimer_);
+            sendToRos("HELLO node=" + std::to_string(nodeIndex_) + " cmd_port=" + std::to_string(localCmdPort_));
+        }
 
-        // Timeseries sampling
         if (csvLoggingEnabled_ && timeseriesSampleInterval_ > 0) {
             timeseriesTimer_ = new cMessage("timeseriesSample");
             scheduleAt(simTime() + timeseriesSampleInterval_, timeseriesTimer_);
+        }
+
+        // Subscribe to host for MAC channel-busy signal (propagates from NIC submodule)
+        findHost()->subscribe(sigChannelBusy_, this);
+    }
+}
+
+
+void RosSDSMApp::receiveSignal(cComponent*, simsignal_t signalID, bool busy, cObject*) {
+    if (signalID != sigChannelBusy_) return;
+
+    if (busy) {
+        lastBusyStart_ = simTime();
+        channelCurrentlyBusy_ = true;
+    } else {
+        if (channelCurrentlyBusy_) {
+            accumulatedBusyTime_ += simTime() - lastBusyStart_;
+        }
+        channelCurrentlyBusy_ = false;
+
+        // Update rolling CBR
+        const simtime_t elapsed = simTime() - cbrWindowStart_;
+        if (elapsed > 0) {
+            currentCBR_ = accumulatedBusyTime_.dbl() / elapsed.dbl();
+        }
+
+        // Reset window periodically
+        if (elapsed >= congestionWindow_) {
+            cbrWindowStart_ = simTime();
+            accumulatedBusyTime_ = SIMTIME_ZERO;
         }
     }
 }
 
 
 void RosSDSMApp::handleSelfMsg(cMessage* msg) {
-    if (msg == udpPollTimer_) {
+    if (udpPollTimer_ && msg == udpPollTimer_) {
         pollUdpQueue();
         scheduleAt(simTime() + rosPollInterval_, udpPollTimer_);
         return;
@@ -352,8 +412,51 @@ void RosSDSMApp::handleSelfMsg(cMessage* msg) {
 }
 
 
+double RosSDSMApp::computeObjectSetChange() const {
+    const auto pos = mobility->getPositionAt(simTime());
+    const double now = simTime().dbl();
+    double change = 0.0;
+    int newCount = 0;
+    int lostCount = 0;
+
+    // Build current filtered perception set
+    std::map<int, NeighborInfo> currentSet;
+    for (const auto& kv : neighborInfo_) {
+        double age = now - kv.second.lastRxTime.dbl();
+        if (age > detectionMaxAge_) continue;
+        double dx = kv.second.x - pos.x;
+        double dy = kv.second.y - pos.y;
+        double dist = std::sqrt(dx * dx + dy * dy);
+        if (dist > detectionRange_) continue;
+        currentSet[kv.first] = kv.second;
+    }
+
+    for (const auto& kv : currentSet) {
+        auto it = lastSentPerceptionSet_.find(kv.first);
+        if (it == lastSentPerceptionSet_.end()) {
+            newCount++;
+        } else {
+            double dx = kv.second.x - it->second.x;
+            double dy = kv.second.y - it->second.y;
+            change += std::sqrt(dx * dx + dy * dy) + std::fabs(kv.second.speed - it->second.speed);
+        }
+    }
+
+    for (const auto& kv : lastSentPerceptionSet_) {
+        if (currentSet.find(kv.first) == currentSet.end()) {
+            lostCount++;
+        }
+    }
+
+    // 5m-equivalent penalty per topology change (new or lost object)
+    change += (newCount + lostCount) * 5.0;
+
+    return change;
+}
+
+
 void RosSDSMApp::evaluateGreedySend() {
-    // U = w1*selfChange + w2*timeSinceSend - w3*congestionProxy
+    // U = w1*selfChange + w4*objectSetChange + w2*timeSinceSend - w3*CBR
 
     const auto pos = mobility->getPositionAt(simTime());
     const double spd = mobility->getSpeed();
@@ -375,17 +478,12 @@ void RosSDSMApp::evaluateGreedySend() {
                             + greedyAlphaSpeed_ * spdDelta
                             + greedyAlphaHeading_ * headingDelta;
 
-    while (!rxTimestamps_.empty() && (simTime() - rxTimestamps_.front()) > congestionWindow_) {
-        rxTimestamps_.pop_front();
-    }
-    const double windowSec = congestionWindow_.dbl();
-    const double congestionProxy = (windowSec > 0)
-        ? static_cast<double>(rxTimestamps_.size()) / windowSec
-        : 0.0;
+    const double objectSetChange = (greedyW4_ > 0) ? computeObjectSetChange() : 0.0;
 
     const double utility = greedyW1_ * selfChange
+                         + greedyW4_ * objectSetChange
                          + greedyW2_ * timeSinceSend
-                         - greedyW3_ * congestionProxy;
+                         - greedyW3_ * currentCBR_;
 
     bool shouldSend = false;
     const char* reason = "none";
@@ -404,8 +502,9 @@ void RosSDSMApp::evaluateGreedySend() {
                 << " reason=" << reason
                 << " U=" << utility
                 << " selfChg=" << selfChange
+                << " objChg=" << objectSetChange
                 << " tSince=" << timeSinceSend
-                << " congestion=" << congestionProxy << "\n";
+                << " CBR=" << currentCBR_ << "\n";
         sendSdsmOnce("", reason);
     }
 }
@@ -419,7 +518,6 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
     const auto pos = mobility->getPositionAt(simTime());
     const double spd = mobility->getSpeed();
 
-    // Heading from movement direction since last send
     double heading = lastSentHeading_;
     {
         const double dx = pos.x - lastSentX_;
@@ -446,7 +544,6 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
         payloadStr = oss.str();
     }
 
-    // Build payload with structured fields (used by receivers for AoI, etc.)
     auto* payload = new veins_ros_v2v::messages::SdsmPayload("sdsmPayload");
     payload->setPayload(payloadStr.c_str());
     payload->setSenderNodeIndex(nodeIndex_);
@@ -457,32 +554,69 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
     payload->setSendTimestamp(simTime().dbl());
     payload->setMessage_id(msgId);
 
-    // J3224 fields
+    // J3224 header fields
     payload->setMsg_cnt((sent_ + 1) % 128);
     payload->setSource_id(0, nodeIndex_ & 0xff);
     payload->setSource_id(1, (nodeIndex_ >> 8) & 0xff);
     payload->setSource_id(2, (nodeIndex_ >> 16) & 0xff);
     payload->setSource_id(3, 0);
-    payload->setEquipment_type(2);  // OBU
+    payload->setEquipment_type(2);
     payload->setRef_pos_x(pos.x);
     payload->setRef_pos_y(pos.y);
     payload->setRef_pos_z(0);
     payload->setSdsm_day(1);
     payload->setSdsm_time_of_day_ms(static_cast<long>(simTime().dbl() * 1000) % (24 * 3600 * 1000));
-    payload->setObj_type(1);   // vehicle
-    payload->setObj_type_cfd(100);
-    payload->setObject_id(nodeIndex_);
-    payload->setMeasurement_time(0);
-    payload->setOffset_x(0);
-    payload->setOffset_y(0);
-    payload->setOffset_z(0);
-    payload->setSpeed(static_cast<int>(std::round(spd / 0.02)));  // 0.02 m/s units
-    const double headingDeg = std::fmod(heading * 180.0 / M_PI + 360.0, 360.0);
-    payload->setHeading(headingDeg <= 359.9875 ? static_cast<int>(std::round(headingDeg / 0.0125)) : 28800);
-    payload->setDet_obj_opt_kind(1);
-    payload->setHas_vehicle_size(true);
-    payload->setVehicle_width_cm(180);
-    payload->setVehicle_length_cm(450);
+
+    // --- Multi-object payload: populate from neighborInfo_ ---
+    const double now = simTime().dbl();
+
+    // Build sorted list of eligible detected objects (nearby recent neighbors)
+    struct DetCandidate {
+        int id;
+        double dist;
+        const NeighborInfo* info;
+    };
+    std::vector<DetCandidate> candidates;
+    for (const auto& kv : neighborInfo_) {
+        double age = now - kv.second.lastRxTime.dbl();
+        if (age > detectionMaxAge_) continue;
+        double ndx = kv.second.x - pos.x;
+        double ndy = kv.second.y - pos.y;
+        double dist = std::sqrt(ndx * ndx + ndy * ndy);
+        if (dist > detectionRange_) continue;
+        candidates.push_back({kv.first, dist, &kv.second});
+    }
+
+    // Sort by distance (closest first), take top-K
+    std::sort(candidates.begin(), candidates.end(),
+              [](const DetCandidate& a, const DetCandidate& b) { return a.dist < b.dist; });
+    int numObj = static_cast<int>(std::min(static_cast<size_t>(maxObjectsPerSdsm_), candidates.size()));
+    payload->setNumObjects(numObj);
+
+    // Save perception set snapshot for object-novelty trigger
+    lastSentPerceptionSet_.clear();
+
+    for (int i = 0; i < numObj; i++) {
+        const auto& c = candidates[i];
+        const NeighborInfo& ni = *c.info;
+
+        payload->setObj_type(i, 1);  // vehicle
+        payload->setObject_id(i, c.id);
+        // Offset from sender's position, in 0.1m units
+        payload->setOffset_x(i, static_cast<int>(std::round((ni.x - pos.x) * 10.0)));
+        payload->setOffset_y(i, static_cast<int>(std::round((ni.y - pos.y) * 10.0)));
+        payload->setOffset_z(i, 0);
+        payload->setObj_speed(i, static_cast<int>(std::round(ni.speed / 0.02)));
+
+        double hdgDeg = std::fmod(ni.heading * 180.0 / M_PI + 360.0, 360.0);
+        payload->setObj_heading(i, hdgDeg <= 359.9875
+            ? static_cast<int>(std::round(hdgDeg / 0.0125)) : 28800);
+
+        lastSentPerceptionSet_[c.id] = ni;
+    }
+
+    // Realistic packet size: base header + per-object data
+    bsm->setByteLength(SDSM_BASE_BYTES + numObj * SDSM_PER_OBJECT_BYTES);
 
     bsm->encapsulate(payload);
     sendDown(bsm);
@@ -497,19 +631,20 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
     // TX log
     const int neighborCountAtTx = static_cast<int>(neighborInfo_.size());
     if (csvLoggingEnabled_) {
-        std::ostringstream txrxRow;
-        txrxRow << simTime().dbl() << "," << nodeIndex_ << ",TX," << sent_ << "\n";
-        appendToBuffer(s_txrxBuffer_, s_txrxLog_, txrxRow.str());
+        if (txrxLogEnabled_) {
+            std::ostringstream txrxRow;
+            txrxRow << simTime().dbl() << "," << nodeIndex_ << ",TX," << sent_ << "\n";
+            appendToBuffer(s_txrxBuffer_, s_txrxLog_, txrxRow.str());
+        }
 
         std::ostringstream txRow;
         txRow << simTime().dbl() << "," << nodeIndex_ << "," << msgId << ","
-              << neighborCountAtTx << "," << triggerReason << "\n";
+              << neighborCountAtTx << "," << numObj << "," << triggerReason << "\n";
         appendToBuffer(s_txBuffer_, s_txLog_, txRow.str());
     }
     txSinceLastSample_++;
 
-    // Forward to ROS 2 bridge
-    {
+    if (bridgeMode_ != BridgeMode::Off) {
         std::ostringstream msg;
         msg << "{\"event\":\"TX\",\"node\":" << nodeIndex_
             << ",\"time\":" << simTime().dbl()
@@ -534,12 +669,14 @@ void RosSDSMApp::onBSM(veins::DemoSafetyMessage* bsm) {
         const double senderX = p->getSenderX();
         const double senderY = p->getSenderY();
         const double senderSpd = p->getSenderSpeed();
+        const double senderHdg = p->getSenderHeading();
+        const int numObjInMsg = p->getNumObjects();
 
         EV_INFO << "[RosSDSMApp] RX BSM from=" << senderIdx
                 << " latency=" << lat
+                << " numObjects=" << numObjInMsg
                 << " payload=\"" << p->getPayload() << "\"\n";
 
-        // AoI
         const double aoi = simTime().dbl() - sendTime;
 
         double interArrival = -1.0;
@@ -568,29 +705,14 @@ void RosSDSMApp::onBSM(veins::DemoSafetyMessage* bsm) {
         const double myY = mobility->getPositionAt(simTime()).y;
         const double distanceToSender = std::sqrt((senderX - myX) * (senderX - myX) + (senderY - myY) * (senderY - myY));
         const int packetSize = bsm->getByteLength();
-        while (!rxTimestamps_.empty() && (simTime() - rxTimestamps_.front()) > congestionWindow_)
-            rxTimestamps_.pop_front();
-        const double windowSec = congestionWindow_.dbl();
-        const double channelBusyRatio = (windowSec > 0)
-            ? static_cast<double>(rxTimestamps_.size()) / windowSec : -1.0;
 
-        if (csvLoggingEnabled_) {
-            std::ostringstream aoiRow;
-            aoiRow << simTime().dbl() << ","
-                   << nodeIndex_ << ","
-                   << senderIdx << ","
-                   << aoi << ","
-                   << interArrival << ","
-                   << snr << ","
-                   << rssDbm << ","
-                   << distanceToSender << ","
-                   << packetSize << ","
-                   << channelBusyRatio << "\n";
-            appendToBuffer(s_aoiBuffer_, s_aoiLog_, aoiRow.str());
-        }
         s_aoiSamples_.push_back(aoi);
 
-        // Redundancy detection
+        localLatencySamples_.push_back(lat.dbl());
+        localAoiSamples_.push_back(aoi);
+        if (interArrival >= 0) localIatSamples_.push_back(interArrival);
+
+        // Redundancy detection (based on sender state change)
         double deltaState = 0;
         bool redundant = false;
         if (it != neighborInfo_.end()) {
@@ -602,52 +724,53 @@ void RosSDSMApp::onBSM(veins::DemoSafetyMessage* bsm) {
         }
         s_redundantTotal_++;
         if (redundant) s_redundantCount_++;
+        localRedundantTotal_++;
+        if (redundant) localRedundantCount_++;
 
         const long msgId = p->getMessage_id();
-        const int neighborCount = -1;  // receiver does not know how many heard this broadcast
-
-        if (csvLoggingEnabled_) {
-            std::ostringstream redundancyRow;
-            redundancyRow << simTime().dbl() << ","
-                          << nodeIndex_ << ","
-                          << senderIdx << ","
-                          << deltaState << ","
-                          << (redundant ? 1 : 0) << ","
-                          << (interArrival >= 0 ? interArrival : -1) << ","
-                          << neighborCount << "\n";
-            appendToBuffer(s_redundancyBuffer_, s_redundancyLog_, redundancyRow.str());
-        }
 
         // Update neighbor table
         NeighborInfo ni;
         ni.x = senderX;
         ni.y = senderY;
         ni.speed = senderSpd;
+        ni.heading = senderHdg;
         ni.lastRxTime = simTime();
         ni.lastSendTimestamp = sendTime;
         neighborInfo_[senderIdx] = ni;
 
-        rxTimestamps_.push_back(simTime());
-
-        // RX event log
+        // Combined per-RX CSV row
         if (csvLoggingEnabled_) {
-            std::ostringstream txrxRow;
-            txrxRow << simTime().dbl() << ","
-                    << nodeIndex_ << ",RX,"
-                    << received_ << "\n";
-            appendToBuffer(s_txrxBuffer_, s_txrxLog_, txrxRow.str());
+            if (txrxLogEnabled_) {
+                std::ostringstream txrxRow;
+                txrxRow << simTime().dbl() << ","
+                        << nodeIndex_ << ",RX,"
+                        << received_ << "\n";
+                appendToBuffer(s_txrxBuffer_, s_txrxLog_, txrxRow.str());
+            }
 
             std::ostringstream rxRow;
-            rxRow << simTime().dbl() << ","
-                  << nodeIndex_ << "," << msgId << ","
-                  << senderIdx << "," << lat.dbl() << ","
+            rxRow << std::fixed << std::setprecision(2) << simTime().dbl() << ","
+                  << nodeIndex_ << ","
+                  << senderIdx << ","
+                  << msgId << ","
+                  << std::setprecision(3) << aoi << ","
+                  << interArrival << ","
+                  << snr << ","
+                  << rssDbm << ","
+                  << distanceToSender << ","
+                  << packetSize << ","
+                  << std::setprecision(4) << currentCBR_ << ","
+                  << numObjInMsg << ","
+                  << std::setprecision(3) << deltaState << ","
                   << (redundant ? 1 : 0) << "\n";
-            appendToBuffer(s_rxBuffer_, s_rxLog_, rxRow.str());
+            const uint64_t cnt = s_rxDetailLogCounter_.fetch_add(1);
+            if ((cnt % static_cast<uint64_t>(rxLogEveryNth_)) == 0)
+                appendToBuffer(s_rxDetailBuffer_, s_rxDetailLog_, rxRow.str());
         }
         rxSinceLastSample_++;
 
-        // Forward to ROS 2 bridge
-        {
+        if (bridgeMode_ != BridgeMode::Off) {
             std::ostringstream msg;
             msg << "{\"event\":\"RX\",\"node\":" << nodeIndex_
                 << ",\"time\":" << simTime().dbl()
@@ -665,63 +788,58 @@ void RosSDSMApp::onBSM(veins::DemoSafetyMessage* bsm) {
 
 
 std::string RosSDSMApp::buildSdsmJson(const veins_ros_v2v::messages::SdsmPayload* p) {
-    // SUMO x,y -> J2735 lat/lon (equirectangular)
     const double latDeg = ORIGIN_LAT + p->getRef_pos_y() / 111320.0;
     const double lonDeg = ORIGIN_LON + p->getRef_pos_x() / (111320.0 * std::cos(ORIGIN_LAT * M_PI / 180.0));
     const int32_t latJ2735 = static_cast<int32_t>(std::round(latDeg * 1e7));
     const int32_t lonJ2735 = static_cast<int32_t>(std::round(lonDeg * 1e7));
-    const int32_t elevJ2735 = -4096;  // unknown
+    const int32_t elevJ2735 = -4096;
+
+    const int numObj = p->getNumObjects();
 
     std::ostringstream j;
     j << "{"
-      // --- SDSM header ---
       << "\"msg_cnt\":" << p->getMsg_cnt()
       << ",\"source_id\":[" << p->getSource_id(0) << "," << p->getSource_id(1)
           << "," << p->getSource_id(2) << "," << p->getSource_id(3) << "]"
       << ",\"equipment_type\":" << p->getEquipment_type()
-      // --- DDateTime ---
       << ",\"sdsm_time_stamp\":{\"day_of_month\":" << p->getSdsm_day()
           << ",\"time_of_day\":" << p->getSdsm_time_of_day_ms() << "}"
-      // --- Position3D (J2735 units) ---
       << ",\"ref_pos\":{\"lat\":" << latJ2735
           << ",\"lon\":" << lonJ2735
           << ",\"elevation\":" << elevJ2735 << "}"
-      // --- DetectedObjectData array (one object: this vehicle) ---
-      << ",\"objects\":[{"
-        // DetectedObjectCommonData
-        << "\"det_obj_common\":{"
-          << "\"obj_type\":" << p->getObj_type()
-          << ",\"obj_type_cfd\":" << p->getObj_type_cfd()
-          << ",\"object_id\":" << p->getObject_id()
-          << ",\"measurement_time\":" << p->getMeasurement_time()
-          // PositionOffsetXYZ
-          << ",\"pos\":{\"offset_x\":" << p->getOffset_x()
-              << ",\"offset_y\":" << p->getOffset_y()
-              << ",\"offset_z\":" << p->getOffset_z()
-              << ",\"has_offset_z\":false}"
-          // PositionConfidenceSet (unavailable in sim)
-          << ",\"pos_confidence\":{\"pos_confidence\":0,\"elevation_confidence\":0}"
-          << ",\"speed\":" << p->getSpeed()
-          << ",\"speed_z\":0,\"has_speed_z\":false"
-          << ",\"heading\":" << p->getHeading()
-        << "}"
-        // CHOICE discriminator
-        << ",\"det_obj_opt_kind\":" << p->getDet_obj_opt_kind()
-        // DetectedVehicleData
-        << ",\"det_veh\":{"
-          << "\"size\":{\"width\":" << p->getVehicle_width_cm()
-              << ",\"length\":" << p->getVehicle_length_cm() << "}"
-          << ",\"has_size\":" << (p->getHas_vehicle_size() ? "true" : "false")
-          << ",\"height\":0,\"has_height\":false"
-          << ",\"vehicle_class\":0,\"has_vehicle_class\":false"
-          << ",\"class_conf\":0,\"has_class_conf\":false"
-        << "}"
-        // DetectedVRUData (empty — not a VRU)
-        << ",\"det_vru\":{\"basic_type\":0}"
-        // DetectedObstacleData (empty — not an obstacle)
-        << ",\"det_obst\":{\"obst_size\":{\"width\":0,\"length\":0,\"height\":0}}"
-      << "}]"
-      << "}";
+      << ",\"objects\":[";
+
+    for (int i = 0; i < numObj; i++) {
+        if (i > 0) j << ",";
+        j << "{"
+          << "\"det_obj_common\":{"
+            << "\"obj_type\":" << p->getObj_type(i)
+            << ",\"obj_type_cfd\":100"
+            << ",\"object_id\":" << p->getObject_id(i)
+            << ",\"measurement_time\":0"
+            << ",\"pos\":{\"offset_x\":" << p->getOffset_x(i)
+                << ",\"offset_y\":" << p->getOffset_y(i)
+                << ",\"offset_z\":" << p->getOffset_z(i)
+                << ",\"has_offset_z\":false}"
+            << ",\"pos_confidence\":{\"pos_confidence\":0,\"elevation_confidence\":0}"
+            << ",\"speed\":" << p->getObj_speed(i)
+            << ",\"speed_z\":0,\"has_speed_z\":false"
+            << ",\"heading\":" << p->getObj_heading(i)
+          << "}"
+          << ",\"det_obj_opt_kind\":1"
+          << ",\"det_veh\":{"
+            << "\"size\":{\"width\":180,\"length\":450}"
+            << ",\"has_size\":true"
+            << ",\"height\":0,\"has_height\":false"
+            << ",\"vehicle_class\":0,\"has_vehicle_class\":false"
+            << ",\"class_conf\":0,\"has_class_conf\":false"
+          << "}"
+          << ",\"det_vru\":{\"basic_type\":0}"
+          << ",\"det_obst\":{\"obst_size\":{\"width\":0,\"length\":0,\"height\":0}}"
+          << "}";
+    }
+
+    j << "]" << "}";
     return j.str();
 }
 
@@ -736,9 +854,68 @@ void RosSDSMApp::finish() {
         s_maxNodeIndexForMetadata = nodeIndex_;
 
     if (csvLoggingEnabled_) {
+        std::lock_guard<std::mutex> lk(s_vehicleSummaryMtx_);
+
+        if (!s_vehicleSummaryLog_) {
+            ensureDirExists("results");
+            const std::string stem = "results/" + logPrefix_ + "-r" + std::to_string(runNumber_);
+            s_vehicleSummaryLog_ = new std::ofstream(stem + "-vehicle-summary.csv");
+            s_vehicleSummaryHeaderWritten_ = false;
+        }
+        if (!s_vehicleSummaryHeaderWritten_) {
+            *s_vehicleSummaryLog_ << "vehicle_id,total_tx,total_rx,avg_latency,p95_latency,avg_aoi,p95_aoi,mean_iat,p95_iat,redundancy_rate,avg_neighbor_count,pdr\n";
+            s_vehicleSummaryHeaderWritten_ = true;
+        }
+
+        auto percentile = [](std::vector<double>& v, double p) -> double {
+            if (v.empty()) return -1.0;
+            std::sort(v.begin(), v.end());
+            size_t idx = static_cast<size_t>(v.size() * p);
+            if (idx >= v.size()) idx = v.size() - 1;
+            return v[idx];
+        };
+        auto mean = [](const std::vector<double>& v) -> double {
+            if (v.empty()) return -1.0;
+            double sum = 0;
+            for (double x : v) sum += x;
+            return sum / v.size();
+        };
+
+        const double avgLat = mean(localLatencySamples_);
+        const double p95Lat = percentile(localLatencySamples_, 0.95);
+        const double avgAoi = mean(localAoiSamples_);
+        const double p95Aoi = percentile(localAoiSamples_, 0.95);
+        const double meanIat = mean(localIatSamples_);
+        const double p95Iat = percentile(localIatSamples_, 0.95);
+        const double redRate = (localRedundantTotal_ > 0)
+            ? static_cast<double>(localRedundantCount_) / localRedundantTotal_ : -1.0;
+
+        const double avgNeighborCount = static_cast<double>(neighborInfo_.size());
+
+        const uint64_t globalTx = s_totalTx_.load();
+        const uint64_t othersTx = (globalTx > static_cast<uint64_t>(sent_))
+            ? (globalTx - static_cast<uint64_t>(sent_)) : 0;
+        const double pdr = (othersTx > 0)
+            ? static_cast<double>(received_) / othersTx : -1.0;
+
+        *s_vehicleSummaryLog_ << nodeIndex_ << ","
+                              << sent_ << ","
+                              << received_ << ","
+                              << avgLat << ","
+                              << p95Lat << ","
+                              << avgAoi << ","
+                              << p95Aoi << ","
+                              << meanIat << ","
+                              << p95Iat << ","
+                              << redRate << ","
+                              << avgNeighborCount << ","
+                              << pdr << "\n";
+        s_vehicleSummaryLog_->flush();
+    }
+
+    if (csvLoggingEnabled_) {
         s_logRefCount_--;
 
-        // Safeguard: if ref count goes negative (shouldn't happen), reset it
         if (s_logRefCount_ < 0) {
             EV_WARN << "[RosSDSMApp] WARNING: logRefCount went negative, resetting\n";
             s_logRefCount_ = 0;
@@ -759,6 +936,17 @@ void RosSDSMApp::finish() {
         }
     }
 
+    if (bridgeMode_ == BridgeMode::Log) {
+        std::lock_guard<std::mutex> lk(s_rosLogMtx_);
+        s_rosLogRefCount_--;
+        if (s_rosLogRefCount_ <= 0 && s_rosLogFile_) {
+            s_rosLogFile_->close();
+            delete s_rosLogFile_;
+            s_rosLogFile_ = nullptr;
+            s_rosLogRefCount_ = 0;
+        }
+    }
+
     DemoBaseApplLayer::finish();
 }
 
@@ -768,20 +956,14 @@ void RosSDSMApp::openCsvLogs(const std::string& prefix, int runNumber) {
 
     const std::string stem = "results/" + prefix + "-r" + std::to_string(runNumber);
 
-    s_aoiLog_ = new std::ofstream(stem + "-aoi.csv");
-    *s_aoiLog_ << "time,receiver,sender,aoi,inter_arrival,snr,rss_dbm,distance_to_sender,packet_size,channel_busy_ratio\n";
+    s_rxDetailLog_ = new std::ofstream(stem + "-rx.csv");
+    *s_rxDetailLog_ << "time,receiver,sender,message_id,aoi,inter_arrival,snr,rss_dbm,distance_to_sender,packet_size,cbr,num_objects,delta_state,redundant\n";
 
     s_txrxLog_ = new std::ofstream(stem + "-txrx.csv");
     *s_txrxLog_ << "time,node,event,cumulative_count\n";
 
-    s_redundancyLog_ = new std::ofstream(stem + "-redundancy.csv");
-    *s_redundancyLog_ << "time,receiver,sender,delta_state,redundant,time_since_last_rx_from_sender,neighbor_count\n";
-
     s_txLog_ = new std::ofstream(stem + "-tx.csv");
-    *s_txLog_ << "time,node,message_id,neighbor_count_at_tx,trigger_reason\n";
-
-    s_rxLog_ = new std::ofstream(stem + "-rx.csv");
-    *s_rxLog_ << "time,node,message_id,sender,delay,was_redundant\n";
+    *s_txLog_ << "time,node,message_id,neighbor_count_at_tx,num_objects_sent,trigger_reason\n";
 
     s_timeseriesLog_ = new std::ofstream(stem + "-timeseries.csv");
     *s_timeseriesLog_ << "time,vehicle_id,avg_aoi_to_neighbors,num_neighbors,tx_count_since_last,rx_count_since_last,position_x,position_y,speed\n";
@@ -791,36 +973,40 @@ void RosSDSMApp::openCsvLogs(const std::string& prefix, int runNumber) {
     s_redundantTotal_ = 0;
     s_totalTx_.store(0);
     s_totalRx_.store(0);
+    s_rxDetailLogCounter_.store(0);
     s_nextMessageId_ = 0;
     s_maxNodeIndexForMetadata = -1;
     s_sendIntervalForMetadata = -1.0;
 }
 
 void RosSDSMApp::closeCsvLogs() {
-    // Flush all remaining buffered data
     flushCsvBuffers();
 
-    if (s_aoiLog_) { s_aoiLog_->close(); delete s_aoiLog_; s_aoiLog_ = nullptr; }
+    if (s_rxDetailLog_) { s_rxDetailLog_->close(); delete s_rxDetailLog_; s_rxDetailLog_ = nullptr; }
     if (s_txrxLog_) { s_txrxLog_->close(); delete s_txrxLog_; s_txrxLog_ = nullptr; }
-    if (s_redundancyLog_) { s_redundancyLog_->close(); delete s_redundancyLog_; s_redundancyLog_ = nullptr; }
     if (s_txLog_) { s_txLog_->close(); delete s_txLog_; s_txLog_ = nullptr; }
-    if (s_rxLog_) { s_rxLog_->close(); delete s_rxLog_; s_rxLog_ = nullptr; }
     if (s_timeseriesLog_) { s_timeseriesLog_->close(); delete s_timeseriesLog_; s_timeseriesLog_ = nullptr; }
     if (s_summaryLog_) { s_summaryLog_->close(); delete s_summaryLog_; s_summaryLog_ = nullptr; }
 
-    // Clear buffers
-    s_aoiBuffer_.clear();
+    {
+        std::lock_guard<std::mutex> lk(s_vehicleSummaryMtx_);
+        if (s_vehicleSummaryLog_) {
+            s_vehicleSummaryLog_->close();
+            delete s_vehicleSummaryLog_;
+            s_vehicleSummaryLog_ = nullptr;
+            s_vehicleSummaryHeaderWritten_ = false;
+        }
+    }
+
+    s_rxDetailBuffer_.clear();
     s_txrxBuffer_.clear();
-    s_redundancyBuffer_.clear();
     s_txBuffer_.clear();
-    s_rxBuffer_.clear();
     s_timeseriesBuffer_.clear();
 }
 
 void RosSDSMApp::writeMetadataAndSummary(const std::string& prefix, int runNumber, double simDurationSec, int numVehicles) {
     const std::string stem = "results/" + prefix + "-r" + std::to_string(runNumber);
 
-    // Metadata: algorithm_name uses lowercase with underscores for consistency
     std::string algoName = prefix;
     for (size_t i = 0; i < algoName.size(); i++) {
         if (algoName[i] == ' ') algoName[i] = '_';
@@ -836,7 +1022,6 @@ void RosSDSMApp::writeMetadataAndSummary(const std::string& prefix, int runNumbe
     meta << "transmission_interval," << (s_sendIntervalForMetadata >= 0 ? s_sendIntervalForMetadata : -1) << "\n";
     meta.close();
 
-    // Summary statistics (one row per run)
     const uint64_t totalTx = s_totalTx_.load();
     const uint64_t totalRx = s_totalRx_.load();
     double avgAoi = -1.0, stdAoi = -1.0, p95Aoi = -1.0, p99Aoi = -1.0;
@@ -947,8 +1132,7 @@ void RosSDSMApp::udpThreadMain() {
         return;
     }
 
-    // Set larger receive buffer at OS level for high message rates
-    int rcvBufSize = 262144;  // 256KB
+    int rcvBufSize = 262144;
 #ifdef _WIN32
     setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (const char*)&rcvBufSize, sizeof(rcvBufSize));
 #else
@@ -962,13 +1146,13 @@ void RosSDSMApp::udpThreadMain() {
 
         timeval tv{};
         tv.tv_sec = 0;
-        tv.tv_usec = 50 * 1000; // Reduced from 200ms to 50ms for faster response
+        tv.tv_usec = 50 * 1000;
 
         const int rv = ::select(static_cast<int>(sock + 1), &rfds, nullptr, nullptr, &tv);
         if (rv <= 0) continue;
 
         if (FD_ISSET(sock, &rfds)) {
-            char buf[65536];  // Increased from 4KB to 64KB
+            char buf[65536];
             sockaddr_in src{};
 #ifdef _WIN32
             int srclen = sizeof(src);
@@ -1046,7 +1230,16 @@ void RosSDSMApp::handleCommandLine(const std::string& line) {
 }
 
 void RosSDSMApp::sendToRos(const std::string& line) {
-    // Best-effort UDP send to ROS 2 bridge using pooled socket
+    if (bridgeMode_ == BridgeMode::Off) return;
+
+    if (bridgeMode_ == BridgeMode::Log) {
+        std::lock_guard<std::mutex> lk(s_rosLogMtx_);
+        if (s_rosLogFile_) {
+            *s_rosLogFile_ << line << "\n";
+        }
+        return;
+    }
+
     std::lock_guard<std::mutex> lk(s_rosSendMtx_);
     if (!s_rosSendInitialized_ || s_rosSendSocket_ == INVALID_SOCKET) {
         return;

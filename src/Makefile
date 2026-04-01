@@ -2,7 +2,7 @@
 # OMNeT++/OMNEST Makefile for veins_ros_v2v_ucla
 #
 # This file was generated with the command:
-#  opp_makemake -f --deep -O out -KVEINS_PROJ=../../veins -DVEINS_IMPORT -I. -I$(VEINS_PROJ)/src -L$(VEINS_PROJ)/src -lveins
+#  opp_makemake -f --deep -O out -KVEINS_PROJ=../../veins -DVEINS_IMPORT -I. -I$(VEINS_PROJ)/src -L$(VEINS_PROJ)/src -lveins$(D)
 #
 
 # Name of target to be created (-o option)
@@ -25,7 +25,7 @@ INCLUDE_PATH = -I. -I$(VEINS_PROJ)/src
 EXTRA_OBJS =
 
 # Additional libraries (-L, -l options)
-LIBS = $(LDFLAG_LIBPATH)$(VEINS_PROJ)/src  -lveins
+LIBS = $(LDFLAG_LIBPATH)$(VEINS_PROJ)/src  -lveins$(D)
 
 # Output directory
 PROJECT_OUTPUT_DIR = ../out
@@ -107,10 +107,22 @@ $O/$(TARGET): $(OBJS)  $(wildcard $(EXTRA_OBJS)) Makefile $(CONFIGFILE)
 .SUFFIXES :
 .PRECIOUS : %_m.h %_m.cc
 
+# Ensure output dir and .last-copts exist before building objects (fixes build from root / clean tree)
+$O/.last-copts:
+	@$(MKPATH) "$O"
+	$(Q)$(file >$(COPTS_FILE),$(COPTS))
+
+# Object files built from .cc (static pattern so rule is found)
+$(OBJS): $O/%.o: %.cc $(COPTS_FILE) | msgheaders smheaders
+	@$(MKPATH) $(dir $@)
+	$(qecho) "$<"
+	$(Q)$(CXX) -c $(CXXFLAGS) $(COPTS) -MMD -MP -MF $@.d -o $@ $<
+
+# Pattern for any other .o (fallback)
 $O/%.o: %.cc $(COPTS_FILE) | msgheaders smheaders
 	@$(MKPATH) $(dir $@)
 	$(qecho) "$<"
-	$(Q)$(CXX) -c $(CXXFLAGS) $(COPTS) -o $@ $<
+	$(Q)$(CXX) -c $(CXXFLAGS) $(COPTS) -MMD -MP -MF $@.d -o $@ $<
 
 %_m.cc %_m.h: %.msg
 	$(qecho) MSGC: $<
@@ -140,5 +152,5 @@ help:
 	@echo "$$HELP_VARIABLES"
 	@echo "$$HELP_EXAMPLES"
 
-# include all dependencies
--include $(OBJS:%=%.d) $(MSGFILES:%.msg=$O/%_m.h.d)
+# include all dependencies (disabled so missing .d do not create empty targets; deps still generated on compile)
+# -include $(OBJS:%=%.d) $(MSGFILES:%.msg=$O/%_m.h.d)
