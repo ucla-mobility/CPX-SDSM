@@ -183,7 +183,10 @@ python3 run_experiments.py --sim-duration 90
 python3 scripts/shrink_rx_csv.py results/Periodic/seed0/Periodic-r0-rx.csv --every 4 --decimals 3
 ```
 
-Results are written to `results/<Algorithm>/seed0/`.
+### Output directories
+
+- **`simulations/results/`** — raw output written by OMNeT++ during the run (full-size, overwritten each time you rerun a config).
+- **`results/<Algorithm>/seed0/`** — organized archive created by `run_experiments.py` after each run. This is the canonical location for analysis — includes `meta.json` and can be post-processed (e.g. shrunk) without affecting the raw data.
 
 ## ROS 2 Bridge (Optional)
 
