@@ -15,7 +15,6 @@
 #include "veins/modules/messages/DemoSafetyMessage_m.h"
 #include "messages/SdsmPayload_m.h"
 
-// Socket type and sockaddr_in forward declaration for header
 #ifdef _WIN32
   #include <winsock2.h>
   typedef SOCKET socket_t;
@@ -31,7 +30,8 @@ namespace veins_ros_v2v {
 
 /**
  * V2V SDSM application with periodic or greedy (event-triggered + AoI +
- * congestion-aware) dissemination. ROS 2 bridge always active via UDP.
+ * congestion-aware) dissemination and multi-object perception payloads.
+ * ROS 2 bridge mode: "off" (batch), "log" (file), "live" (UDP).
  */
 class RosSDSMApp : public veins::DemoBaseApplLayer {
 public:
@@ -45,9 +45,13 @@ protected:
     virtual void onBSM(veins::DemoSafetyMessage* bsm) override;
     virtual void handleSelfMsg(cMessage* msg) override;
 
+    // PHY CBR signal listener (bool variant for Mac1609_4::sigChannelBusy)
+    virtual void receiveSignal(cComponent* source, simsignal_t signalID, bool b, cObject* details) override;
+
 private:
     void sendSdsmOnce(const std::string& overridePayload = "", const std::string& triggerReason = "periodic");
     void evaluateGreedySend();
+    double computeObjectSetChange() const;
 
     void startUdpListener();
     void stopUdpListener();
@@ -56,7 +60,6 @@ private:
     void handleCommandLine(const std::string& line);
     void sendToRos(const std::string& line);
 
-    // CPX-SDSM JSON serialization (matches sdsm_msgs ROS 2 hierarchy)
     std::string buildSdsmJson(const veins_ros_v2v::messages::SdsmPayload* p);
 
     static void openCsvLogs(const std::string& prefix, int runNumber);
@@ -64,10 +67,11 @@ private:
     void writeTimeseriesRow();
     static void writeMetadataAndSummary(const std::string& prefix, int runNumber, double simDurationSec, int numVehicles);
 
-    // UCLA campus origin for SUMO -> J2735 lat/lon conversion
     static constexpr double ORIGIN_LAT = 34.0689;
     static constexpr double ORIGIN_LON = -118.4452;
 
+    enum class BridgeMode { Off = 0, Log = 1, Live = 2 };
+    BridgeMode bridgeMode_ = BridgeMode::Off;
 
     std::string rosRemoteHost_;
     int rosCmdPortBase_ = 50000;
@@ -83,16 +87,26 @@ private:
     double greedyW1_ = 1.0;
     double greedyW2_ = 0.5;
     double greedyW3_ = 0.3;
+    double greedyW4_ = 0.0;
     double greedyThreshold_ = 1.0;
     simtime_t greedyMinInterval_ = 0.2;
     simtime_t greedyMaxInterval_ = 5.0;
     simtime_t congestionWindow_ = 1.0;
     double redundancyEpsilon_ = 0.5;
 
+    // Multi-object SDSM parameters
+    int maxObjectsPerSdsm_ = 16;
+    double detectionRange_ = 300.0;
+    double detectionMaxAge_ = 2.0;
+    static constexpr int SDSM_BASE_BYTES = 40;
+    static constexpr int SDSM_PER_OBJECT_BYTES = 24;
+
     bool csvLoggingEnabled_ = true;
+    bool txrxLogEnabled_ = false;
+    int rxLogEveryNth_ = 1;
     std::string logPrefix_ = "default";
     int runNumber_ = 0;
-    double timeseriesSampleInterval_ = 0.1;  // seconds
+    double timeseriesSampleInterval_ = 1.0;
     simtime_t lastTimeseriesSample_;
     cMessage* timeseriesTimer_ = nullptr;
     long txSinceLastSample_ = 0;
@@ -116,12 +130,29 @@ private:
         double x = 0;
         double y = 0;
         double speed = 0;
+        double heading = 0;
         simtime_t lastRxTime;
-        double lastSendTimestamp = 0;  // sender's send time of last RX (for avg AoI in timeseries)
+        double lastSendTimestamp = 0;
     };
     std::map<int, NeighborInfo> neighborInfo_;
 
-    std::deque<simtime_t> rxTimestamps_;
+    // Snapshot of perception set at last TX (for object-set novelty trigger)
+    std::map<int, NeighborInfo> lastSentPerceptionSet_;
+
+    // True PHY CBR via Mac1609_4::sigChannelBusy signal
+    simsignal_t sigChannelBusy_;
+    simtime_t lastBusyStart_;
+    simtime_t accumulatedBusyTime_;
+    simtime_t cbrWindowStart_;
+    double currentCBR_ = 0.0;
+    bool channelCurrentlyBusy_ = false;
+
+    // Per-vehicle metric vectors for vehicle-summary CSV
+    std::vector<double> localLatencySamples_;
+    std::vector<double> localAoiSamples_;
+    std::vector<double> localIatSamples_;
+    uint64_t localRedundantCount_ = 0;
+    uint64_t localRedundantTotal_ = 0;
 
     std::atomic<bool> udpRunning_{false};
     std::thread udpThread_;
@@ -137,21 +168,18 @@ private:
     void initRosSendSocket();
     void cleanupRosSendSocket();
 
-    static std::vector<std::string> s_aoiBuffer_;
+    static std::vector<std::string> s_rxDetailBuffer_;
     static std::vector<std::string> s_txrxBuffer_;
-    static std::vector<std::string> s_redundancyBuffer_;
     static std::vector<std::string> s_txBuffer_;
-    static std::vector<std::string> s_rxBuffer_;
     static std::vector<std::string> s_timeseriesBuffer_;
-    static constexpr size_t CSV_BUFFER_SIZE = 1000;  // Flush every 1000 rows
+    static constexpr size_t CSV_BUFFER_SIZE = 1000;
     static void flushCsvBuffers();
     static void appendToBuffer(std::vector<std::string>& buffer, std::ofstream* log, const std::string& line);
 
-    static std::ofstream* s_aoiLog_;
+    static std::ofstream* s_rxDetailLog_;
+    static std::atomic<uint64_t> s_rxDetailLogCounter_;
     static std::ofstream* s_txrxLog_;
-    static std::ofstream* s_redundancyLog_;
     static std::ofstream* s_txLog_;
-    static std::ofstream* s_rxLog_;
     static std::ofstream* s_timeseriesLog_;
     static std::ofstream* s_summaryLog_;
     static int s_logRefCount_;
@@ -161,6 +189,14 @@ private:
     static uint64_t s_redundantCount_;
     static uint64_t s_redundantTotal_;
     static long s_nextMessageId_;
+
+    static std::ofstream* s_vehicleSummaryLog_;
+    static bool s_vehicleSummaryHeaderWritten_;
+    static std::mutex s_vehicleSummaryMtx_;
+
+    static std::ofstream* s_rosLogFile_;
+    static std::mutex s_rosLogMtx_;
+    static int s_rosLogRefCount_;
 };
 
 } // namespace veins_ros_v2v

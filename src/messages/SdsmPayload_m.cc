@@ -196,19 +196,28 @@ void SdsmPayload::copy(const SdsmPayload& other)
     this->ref_pos_z = other.ref_pos_z;
     this->sdsm_day = other.sdsm_day;
     this->sdsm_time_of_day_ms = other.sdsm_time_of_day_ms;
-    this->obj_type = other.obj_type;
-    this->obj_type_cfd = other.obj_type_cfd;
-    this->object_id = other.object_id;
-    this->measurement_time = other.measurement_time;
-    this->offset_x = other.offset_x;
-    this->offset_y = other.offset_y;
-    this->offset_z = other.offset_z;
-    this->speed = other.speed;
-    this->heading = other.heading;
-    this->det_obj_opt_kind = other.det_obj_opt_kind;
-    this->has_vehicle_size = other.has_vehicle_size;
-    this->vehicle_width_cm = other.vehicle_width_cm;
-    this->vehicle_length_cm = other.vehicle_length_cm;
+    this->numObjects = other.numObjects;
+    for (size_t i = 0; i < 16; i++) {
+        this->obj_type[i] = other.obj_type[i];
+    }
+    for (size_t i = 0; i < 16; i++) {
+        this->object_id[i] = other.object_id[i];
+    }
+    for (size_t i = 0; i < 16; i++) {
+        this->offset_x[i] = other.offset_x[i];
+    }
+    for (size_t i = 0; i < 16; i++) {
+        this->offset_y[i] = other.offset_y[i];
+    }
+    for (size_t i = 0; i < 16; i++) {
+        this->offset_z[i] = other.offset_z[i];
+    }
+    for (size_t i = 0; i < 16; i++) {
+        this->obj_speed[i] = other.obj_speed[i];
+    }
+    for (size_t i = 0; i < 16; i++) {
+        this->obj_heading[i] = other.obj_heading[i];
+    }
 }
 
 void SdsmPayload::parsimPack(omnetpp::cCommBuffer *b) const
@@ -230,19 +239,14 @@ void SdsmPayload::parsimPack(omnetpp::cCommBuffer *b) const
     doParsimPacking(b,this->ref_pos_z);
     doParsimPacking(b,this->sdsm_day);
     doParsimPacking(b,this->sdsm_time_of_day_ms);
-    doParsimPacking(b,this->obj_type);
-    doParsimPacking(b,this->obj_type_cfd);
-    doParsimPacking(b,this->object_id);
-    doParsimPacking(b,this->measurement_time);
-    doParsimPacking(b,this->offset_x);
-    doParsimPacking(b,this->offset_y);
-    doParsimPacking(b,this->offset_z);
-    doParsimPacking(b,this->speed);
-    doParsimPacking(b,this->heading);
-    doParsimPacking(b,this->det_obj_opt_kind);
-    doParsimPacking(b,this->has_vehicle_size);
-    doParsimPacking(b,this->vehicle_width_cm);
-    doParsimPacking(b,this->vehicle_length_cm);
+    doParsimPacking(b,this->numObjects);
+    doParsimArrayPacking(b,this->obj_type,16);
+    doParsimArrayPacking(b,this->object_id,16);
+    doParsimArrayPacking(b,this->offset_x,16);
+    doParsimArrayPacking(b,this->offset_y,16);
+    doParsimArrayPacking(b,this->offset_z,16);
+    doParsimArrayPacking(b,this->obj_speed,16);
+    doParsimArrayPacking(b,this->obj_heading,16);
 }
 
 void SdsmPayload::parsimUnpack(omnetpp::cCommBuffer *b)
@@ -264,19 +268,14 @@ void SdsmPayload::parsimUnpack(omnetpp::cCommBuffer *b)
     doParsimUnpacking(b,this->ref_pos_z);
     doParsimUnpacking(b,this->sdsm_day);
     doParsimUnpacking(b,this->sdsm_time_of_day_ms);
-    doParsimUnpacking(b,this->obj_type);
-    doParsimUnpacking(b,this->obj_type_cfd);
-    doParsimUnpacking(b,this->object_id);
-    doParsimUnpacking(b,this->measurement_time);
-    doParsimUnpacking(b,this->offset_x);
-    doParsimUnpacking(b,this->offset_y);
-    doParsimUnpacking(b,this->offset_z);
-    doParsimUnpacking(b,this->speed);
-    doParsimUnpacking(b,this->heading);
-    doParsimUnpacking(b,this->det_obj_opt_kind);
-    doParsimUnpacking(b,this->has_vehicle_size);
-    doParsimUnpacking(b,this->vehicle_width_cm);
-    doParsimUnpacking(b,this->vehicle_length_cm);
+    doParsimUnpacking(b,this->numObjects);
+    doParsimArrayUnpacking(b,this->obj_type,16);
+    doParsimArrayUnpacking(b,this->object_id,16);
+    doParsimArrayUnpacking(b,this->offset_x,16);
+    doParsimArrayUnpacking(b,this->offset_y,16);
+    doParsimArrayUnpacking(b,this->offset_z,16);
+    doParsimArrayUnpacking(b,this->obj_speed,16);
+    doParsimArrayUnpacking(b,this->obj_heading,16);
 }
 
 const char * SdsmPayload::getPayload() const
@@ -446,134 +445,133 @@ void SdsmPayload::setSdsm_time_of_day_ms(long sdsm_time_of_day_ms)
     this->sdsm_time_of_day_ms = sdsm_time_of_day_ms;
 }
 
-int SdsmPayload::getObj_type() const
+int SdsmPayload::getNumObjects() const
 {
-    return this->obj_type;
+    return this->numObjects;
 }
 
-void SdsmPayload::setObj_type(int obj_type)
+void SdsmPayload::setNumObjects(int numObjects)
 {
-    this->obj_type = obj_type;
+    this->numObjects = numObjects;
 }
 
-int SdsmPayload::getObj_type_cfd() const
+size_t SdsmPayload::getObj_typeArraySize() const
 {
-    return this->obj_type_cfd;
+    return 16;
 }
 
-void SdsmPayload::setObj_type_cfd(int obj_type_cfd)
+int SdsmPayload::getObj_type(size_t k) const
 {
-    this->obj_type_cfd = obj_type_cfd;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    return this->obj_type[k];
 }
 
-int SdsmPayload::getObject_id() const
+void SdsmPayload::setObj_type(size_t k, int obj_type)
 {
-    return this->object_id;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    this->obj_type[k] = obj_type;
 }
 
-void SdsmPayload::setObject_id(int object_id)
+size_t SdsmPayload::getObject_idArraySize() const
 {
-    this->object_id = object_id;
+    return 16;
 }
 
-int SdsmPayload::getMeasurement_time() const
+int SdsmPayload::getObject_id(size_t k) const
 {
-    return this->measurement_time;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    return this->object_id[k];
 }
 
-void SdsmPayload::setMeasurement_time(int measurement_time)
+void SdsmPayload::setObject_id(size_t k, int object_id)
 {
-    this->measurement_time = measurement_time;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    this->object_id[k] = object_id;
 }
 
-int SdsmPayload::getOffset_x() const
+size_t SdsmPayload::getOffset_xArraySize() const
 {
-    return this->offset_x;
+    return 16;
 }
 
-void SdsmPayload::setOffset_x(int offset_x)
+int SdsmPayload::getOffset_x(size_t k) const
 {
-    this->offset_x = offset_x;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    return this->offset_x[k];
 }
 
-int SdsmPayload::getOffset_y() const
+void SdsmPayload::setOffset_x(size_t k, int offset_x)
 {
-    return this->offset_y;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    this->offset_x[k] = offset_x;
 }
 
-void SdsmPayload::setOffset_y(int offset_y)
+size_t SdsmPayload::getOffset_yArraySize() const
 {
-    this->offset_y = offset_y;
+    return 16;
 }
 
-int SdsmPayload::getOffset_z() const
+int SdsmPayload::getOffset_y(size_t k) const
 {
-    return this->offset_z;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    return this->offset_y[k];
 }
 
-void SdsmPayload::setOffset_z(int offset_z)
+void SdsmPayload::setOffset_y(size_t k, int offset_y)
 {
-    this->offset_z = offset_z;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    this->offset_y[k] = offset_y;
 }
 
-int SdsmPayload::getSpeed() const
+size_t SdsmPayload::getOffset_zArraySize() const
 {
-    return this->speed;
+    return 16;
 }
 
-void SdsmPayload::setSpeed(int speed)
+int SdsmPayload::getOffset_z(size_t k) const
 {
-    this->speed = speed;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    return this->offset_z[k];
 }
 
-int SdsmPayload::getHeading() const
+void SdsmPayload::setOffset_z(size_t k, int offset_z)
 {
-    return this->heading;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    this->offset_z[k] = offset_z;
 }
 
-void SdsmPayload::setHeading(int heading)
+size_t SdsmPayload::getObj_speedArraySize() const
 {
-    this->heading = heading;
+    return 16;
 }
 
-int SdsmPayload::getDet_obj_opt_kind() const
+int SdsmPayload::getObj_speed(size_t k) const
 {
-    return this->det_obj_opt_kind;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    return this->obj_speed[k];
 }
 
-void SdsmPayload::setDet_obj_opt_kind(int det_obj_opt_kind)
+void SdsmPayload::setObj_speed(size_t k, int obj_speed)
 {
-    this->det_obj_opt_kind = det_obj_opt_kind;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    this->obj_speed[k] = obj_speed;
 }
 
-bool SdsmPayload::getHas_vehicle_size() const
+size_t SdsmPayload::getObj_headingArraySize() const
 {
-    return this->has_vehicle_size;
+    return 16;
 }
 
-void SdsmPayload::setHas_vehicle_size(bool has_vehicle_size)
+int SdsmPayload::getObj_heading(size_t k) const
 {
-    this->has_vehicle_size = has_vehicle_size;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    return this->obj_heading[k];
 }
 
-int SdsmPayload::getVehicle_width_cm() const
+void SdsmPayload::setObj_heading(size_t k, int obj_heading)
 {
-    return this->vehicle_width_cm;
-}
-
-void SdsmPayload::setVehicle_width_cm(int vehicle_width_cm)
-{
-    this->vehicle_width_cm = vehicle_width_cm;
-}
-
-int SdsmPayload::getVehicle_length_cm() const
-{
-    return this->vehicle_length_cm;
-}
-
-void SdsmPayload::setVehicle_length_cm(int vehicle_length_cm)
-{
-    this->vehicle_length_cm = vehicle_length_cm;
+    if (k >= 16) throw omnetpp::cRuntimeError("Array of size %lu indexed by %lu", (unsigned long)16, (unsigned long)k);
+    this->obj_heading[k] = obj_heading;
 }
 
 class SdsmPayloadDescriptor : public omnetpp::cClassDescriptor
@@ -597,19 +595,14 @@ class SdsmPayloadDescriptor : public omnetpp::cClassDescriptor
         FIELD_ref_pos_z,
         FIELD_sdsm_day,
         FIELD_sdsm_time_of_day_ms,
+        FIELD_numObjects,
         FIELD_obj_type,
-        FIELD_obj_type_cfd,
         FIELD_object_id,
-        FIELD_measurement_time,
         FIELD_offset_x,
         FIELD_offset_y,
         FIELD_offset_z,
-        FIELD_speed,
-        FIELD_heading,
-        FIELD_det_obj_opt_kind,
-        FIELD_has_vehicle_size,
-        FIELD_vehicle_width_cm,
-        FIELD_vehicle_length_cm,
+        FIELD_obj_speed,
+        FIELD_obj_heading,
     };
   public:
     SdsmPayloadDescriptor();
@@ -676,7 +669,7 @@ const char *SdsmPayloadDescriptor::getProperty(const char *propertyName) const
 int SdsmPayloadDescriptor::getFieldCount() const
 {
     omnetpp::cClassDescriptor *base = getBaseClassDescriptor();
-    return base ? 29+base->getFieldCount() : 29;
+    return base ? 24+base->getFieldCount() : 24;
 }
 
 unsigned int SdsmPayloadDescriptor::getFieldTypeFlags(int field) const
@@ -704,21 +697,16 @@ unsigned int SdsmPayloadDescriptor::getFieldTypeFlags(int field) const
         FD_ISEDITABLE,    // FIELD_ref_pos_z
         FD_ISEDITABLE,    // FIELD_sdsm_day
         FD_ISEDITABLE,    // FIELD_sdsm_time_of_day_ms
-        FD_ISEDITABLE,    // FIELD_obj_type
-        FD_ISEDITABLE,    // FIELD_obj_type_cfd
-        FD_ISEDITABLE,    // FIELD_object_id
-        FD_ISEDITABLE,    // FIELD_measurement_time
-        FD_ISEDITABLE,    // FIELD_offset_x
-        FD_ISEDITABLE,    // FIELD_offset_y
-        FD_ISEDITABLE,    // FIELD_offset_z
-        FD_ISEDITABLE,    // FIELD_speed
-        FD_ISEDITABLE,    // FIELD_heading
-        FD_ISEDITABLE,    // FIELD_det_obj_opt_kind
-        FD_ISEDITABLE,    // FIELD_has_vehicle_size
-        FD_ISEDITABLE,    // FIELD_vehicle_width_cm
-        FD_ISEDITABLE,    // FIELD_vehicle_length_cm
+        FD_ISEDITABLE,    // FIELD_numObjects
+        FD_ISARRAY | FD_ISEDITABLE,    // FIELD_obj_type
+        FD_ISARRAY | FD_ISEDITABLE,    // FIELD_object_id
+        FD_ISARRAY | FD_ISEDITABLE,    // FIELD_offset_x
+        FD_ISARRAY | FD_ISEDITABLE,    // FIELD_offset_y
+        FD_ISARRAY | FD_ISEDITABLE,    // FIELD_offset_z
+        FD_ISARRAY | FD_ISEDITABLE,    // FIELD_obj_speed
+        FD_ISARRAY | FD_ISEDITABLE,    // FIELD_obj_heading
     };
-    return (field >= 0 && field < 29) ? fieldTypeFlags[field] : 0;
+    return (field >= 0 && field < 24) ? fieldTypeFlags[field] : 0;
 }
 
 const char *SdsmPayloadDescriptor::getFieldName(int field) const
@@ -746,21 +734,16 @@ const char *SdsmPayloadDescriptor::getFieldName(int field) const
         "ref_pos_z",
         "sdsm_day",
         "sdsm_time_of_day_ms",
+        "numObjects",
         "obj_type",
-        "obj_type_cfd",
         "object_id",
-        "measurement_time",
         "offset_x",
         "offset_y",
         "offset_z",
-        "speed",
-        "heading",
-        "det_obj_opt_kind",
-        "has_vehicle_size",
-        "vehicle_width_cm",
-        "vehicle_length_cm",
+        "obj_speed",
+        "obj_heading",
     };
-    return (field >= 0 && field < 29) ? fieldNames[field] : nullptr;
+    return (field >= 0 && field < 24) ? fieldNames[field] : nullptr;
 }
 
 int SdsmPayloadDescriptor::findField(const char *fieldName) const
@@ -783,19 +766,14 @@ int SdsmPayloadDescriptor::findField(const char *fieldName) const
     if (strcmp(fieldName, "ref_pos_z") == 0) return baseIndex + 13;
     if (strcmp(fieldName, "sdsm_day") == 0) return baseIndex + 14;
     if (strcmp(fieldName, "sdsm_time_of_day_ms") == 0) return baseIndex + 15;
-    if (strcmp(fieldName, "obj_type") == 0) return baseIndex + 16;
-    if (strcmp(fieldName, "obj_type_cfd") == 0) return baseIndex + 17;
+    if (strcmp(fieldName, "numObjects") == 0) return baseIndex + 16;
+    if (strcmp(fieldName, "obj_type") == 0) return baseIndex + 17;
     if (strcmp(fieldName, "object_id") == 0) return baseIndex + 18;
-    if (strcmp(fieldName, "measurement_time") == 0) return baseIndex + 19;
-    if (strcmp(fieldName, "offset_x") == 0) return baseIndex + 20;
-    if (strcmp(fieldName, "offset_y") == 0) return baseIndex + 21;
-    if (strcmp(fieldName, "offset_z") == 0) return baseIndex + 22;
-    if (strcmp(fieldName, "speed") == 0) return baseIndex + 23;
-    if (strcmp(fieldName, "heading") == 0) return baseIndex + 24;
-    if (strcmp(fieldName, "det_obj_opt_kind") == 0) return baseIndex + 25;
-    if (strcmp(fieldName, "has_vehicle_size") == 0) return baseIndex + 26;
-    if (strcmp(fieldName, "vehicle_width_cm") == 0) return baseIndex + 27;
-    if (strcmp(fieldName, "vehicle_length_cm") == 0) return baseIndex + 28;
+    if (strcmp(fieldName, "offset_x") == 0) return baseIndex + 19;
+    if (strcmp(fieldName, "offset_y") == 0) return baseIndex + 20;
+    if (strcmp(fieldName, "offset_z") == 0) return baseIndex + 21;
+    if (strcmp(fieldName, "obj_speed") == 0) return baseIndex + 22;
+    if (strcmp(fieldName, "obj_heading") == 0) return baseIndex + 23;
     return base ? base->findField(fieldName) : -1;
 }
 
@@ -824,21 +802,16 @@ const char *SdsmPayloadDescriptor::getFieldTypeString(int field) const
         "double",    // FIELD_ref_pos_z
         "int",    // FIELD_sdsm_day
         "long",    // FIELD_sdsm_time_of_day_ms
+        "int",    // FIELD_numObjects
         "int",    // FIELD_obj_type
-        "int",    // FIELD_obj_type_cfd
         "int",    // FIELD_object_id
-        "int",    // FIELD_measurement_time
         "int",    // FIELD_offset_x
         "int",    // FIELD_offset_y
         "int",    // FIELD_offset_z
-        "int",    // FIELD_speed
-        "int",    // FIELD_heading
-        "int",    // FIELD_det_obj_opt_kind
-        "bool",    // FIELD_has_vehicle_size
-        "int",    // FIELD_vehicle_width_cm
-        "int",    // FIELD_vehicle_length_cm
+        "int",    // FIELD_obj_speed
+        "int",    // FIELD_obj_heading
     };
-    return (field >= 0 && field < 29) ? fieldTypeStrings[field] : nullptr;
+    return (field >= 0 && field < 24) ? fieldTypeStrings[field] : nullptr;
 }
 
 const char **SdsmPayloadDescriptor::getFieldPropertyNames(int field) const
@@ -878,6 +851,13 @@ int SdsmPayloadDescriptor::getFieldArraySize(omnetpp::any_ptr object, int field)
     SdsmPayload *pp = omnetpp::fromAnyPtr<SdsmPayload>(object); (void)pp;
     switch (field) {
         case FIELD_source_id: return 4;
+        case FIELD_obj_type: return 16;
+        case FIELD_object_id: return 16;
+        case FIELD_offset_x: return 16;
+        case FIELD_offset_y: return 16;
+        case FIELD_offset_z: return 16;
+        case FIELD_obj_speed: return 16;
+        case FIELD_obj_heading: return 16;
         default: return 0;
     }
 }
@@ -938,19 +918,14 @@ std::string SdsmPayloadDescriptor::getFieldValueAsString(omnetpp::any_ptr object
         case FIELD_ref_pos_z: return double2string(pp->getRef_pos_z());
         case FIELD_sdsm_day: return long2string(pp->getSdsm_day());
         case FIELD_sdsm_time_of_day_ms: return long2string(pp->getSdsm_time_of_day_ms());
-        case FIELD_obj_type: return long2string(pp->getObj_type());
-        case FIELD_obj_type_cfd: return long2string(pp->getObj_type_cfd());
-        case FIELD_object_id: return long2string(pp->getObject_id());
-        case FIELD_measurement_time: return long2string(pp->getMeasurement_time());
-        case FIELD_offset_x: return long2string(pp->getOffset_x());
-        case FIELD_offset_y: return long2string(pp->getOffset_y());
-        case FIELD_offset_z: return long2string(pp->getOffset_z());
-        case FIELD_speed: return long2string(pp->getSpeed());
-        case FIELD_heading: return long2string(pp->getHeading());
-        case FIELD_det_obj_opt_kind: return long2string(pp->getDet_obj_opt_kind());
-        case FIELD_has_vehicle_size: return bool2string(pp->getHas_vehicle_size());
-        case FIELD_vehicle_width_cm: return long2string(pp->getVehicle_width_cm());
-        case FIELD_vehicle_length_cm: return long2string(pp->getVehicle_length_cm());
+        case FIELD_numObjects: return long2string(pp->getNumObjects());
+        case FIELD_obj_type: return long2string(pp->getObj_type(i));
+        case FIELD_object_id: return long2string(pp->getObject_id(i));
+        case FIELD_offset_x: return long2string(pp->getOffset_x(i));
+        case FIELD_offset_y: return long2string(pp->getOffset_y(i));
+        case FIELD_offset_z: return long2string(pp->getOffset_z(i));
+        case FIELD_obj_speed: return long2string(pp->getObj_speed(i));
+        case FIELD_obj_heading: return long2string(pp->getObj_heading(i));
         default: return "";
     }
 }
@@ -983,19 +958,14 @@ void SdsmPayloadDescriptor::setFieldValueAsString(omnetpp::any_ptr object, int f
         case FIELD_ref_pos_z: pp->setRef_pos_z(string2double(value)); break;
         case FIELD_sdsm_day: pp->setSdsm_day(string2long(value)); break;
         case FIELD_sdsm_time_of_day_ms: pp->setSdsm_time_of_day_ms(string2long(value)); break;
-        case FIELD_obj_type: pp->setObj_type(string2long(value)); break;
-        case FIELD_obj_type_cfd: pp->setObj_type_cfd(string2long(value)); break;
-        case FIELD_object_id: pp->setObject_id(string2long(value)); break;
-        case FIELD_measurement_time: pp->setMeasurement_time(string2long(value)); break;
-        case FIELD_offset_x: pp->setOffset_x(string2long(value)); break;
-        case FIELD_offset_y: pp->setOffset_y(string2long(value)); break;
-        case FIELD_offset_z: pp->setOffset_z(string2long(value)); break;
-        case FIELD_speed: pp->setSpeed(string2long(value)); break;
-        case FIELD_heading: pp->setHeading(string2long(value)); break;
-        case FIELD_det_obj_opt_kind: pp->setDet_obj_opt_kind(string2long(value)); break;
-        case FIELD_has_vehicle_size: pp->setHas_vehicle_size(string2bool(value)); break;
-        case FIELD_vehicle_width_cm: pp->setVehicle_width_cm(string2long(value)); break;
-        case FIELD_vehicle_length_cm: pp->setVehicle_length_cm(string2long(value)); break;
+        case FIELD_numObjects: pp->setNumObjects(string2long(value)); break;
+        case FIELD_obj_type: pp->setObj_type(i,string2long(value)); break;
+        case FIELD_object_id: pp->setObject_id(i,string2long(value)); break;
+        case FIELD_offset_x: pp->setOffset_x(i,string2long(value)); break;
+        case FIELD_offset_y: pp->setOffset_y(i,string2long(value)); break;
+        case FIELD_offset_z: pp->setOffset_z(i,string2long(value)); break;
+        case FIELD_obj_speed: pp->setObj_speed(i,string2long(value)); break;
+        case FIELD_obj_heading: pp->setObj_heading(i,string2long(value)); break;
         default: throw omnetpp::cRuntimeError("Cannot set field %d of class 'SdsmPayload'", field);
     }
 }
@@ -1026,19 +996,14 @@ omnetpp::cValue SdsmPayloadDescriptor::getFieldValue(omnetpp::any_ptr object, in
         case FIELD_ref_pos_z: return pp->getRef_pos_z();
         case FIELD_sdsm_day: return pp->getSdsm_day();
         case FIELD_sdsm_time_of_day_ms: return (omnetpp::intval_t)(pp->getSdsm_time_of_day_ms());
-        case FIELD_obj_type: return pp->getObj_type();
-        case FIELD_obj_type_cfd: return pp->getObj_type_cfd();
-        case FIELD_object_id: return pp->getObject_id();
-        case FIELD_measurement_time: return pp->getMeasurement_time();
-        case FIELD_offset_x: return pp->getOffset_x();
-        case FIELD_offset_y: return pp->getOffset_y();
-        case FIELD_offset_z: return pp->getOffset_z();
-        case FIELD_speed: return pp->getSpeed();
-        case FIELD_heading: return pp->getHeading();
-        case FIELD_det_obj_opt_kind: return pp->getDet_obj_opt_kind();
-        case FIELD_has_vehicle_size: return pp->getHas_vehicle_size();
-        case FIELD_vehicle_width_cm: return pp->getVehicle_width_cm();
-        case FIELD_vehicle_length_cm: return pp->getVehicle_length_cm();
+        case FIELD_numObjects: return pp->getNumObjects();
+        case FIELD_obj_type: return pp->getObj_type(i);
+        case FIELD_object_id: return pp->getObject_id(i);
+        case FIELD_offset_x: return pp->getOffset_x(i);
+        case FIELD_offset_y: return pp->getOffset_y(i);
+        case FIELD_offset_z: return pp->getOffset_z(i);
+        case FIELD_obj_speed: return pp->getObj_speed(i);
+        case FIELD_obj_heading: return pp->getObj_heading(i);
         default: throw omnetpp::cRuntimeError("Cannot return field %d of class 'SdsmPayload' as cValue -- field index out of range?", field);
     }
 }
@@ -1071,19 +1036,14 @@ void SdsmPayloadDescriptor::setFieldValue(omnetpp::any_ptr object, int field, in
         case FIELD_ref_pos_z: pp->setRef_pos_z(value.doubleValue()); break;
         case FIELD_sdsm_day: pp->setSdsm_day(omnetpp::checked_int_cast<int>(value.intValue())); break;
         case FIELD_sdsm_time_of_day_ms: pp->setSdsm_time_of_day_ms(omnetpp::checked_int_cast<long>(value.intValue())); break;
-        case FIELD_obj_type: pp->setObj_type(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_obj_type_cfd: pp->setObj_type_cfd(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_object_id: pp->setObject_id(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_measurement_time: pp->setMeasurement_time(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_offset_x: pp->setOffset_x(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_offset_y: pp->setOffset_y(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_offset_z: pp->setOffset_z(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_speed: pp->setSpeed(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_heading: pp->setHeading(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_det_obj_opt_kind: pp->setDet_obj_opt_kind(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_has_vehicle_size: pp->setHas_vehicle_size(value.boolValue()); break;
-        case FIELD_vehicle_width_cm: pp->setVehicle_width_cm(omnetpp::checked_int_cast<int>(value.intValue())); break;
-        case FIELD_vehicle_length_cm: pp->setVehicle_length_cm(omnetpp::checked_int_cast<int>(value.intValue())); break;
+        case FIELD_numObjects: pp->setNumObjects(omnetpp::checked_int_cast<int>(value.intValue())); break;
+        case FIELD_obj_type: pp->setObj_type(i,omnetpp::checked_int_cast<int>(value.intValue())); break;
+        case FIELD_object_id: pp->setObject_id(i,omnetpp::checked_int_cast<int>(value.intValue())); break;
+        case FIELD_offset_x: pp->setOffset_x(i,omnetpp::checked_int_cast<int>(value.intValue())); break;
+        case FIELD_offset_y: pp->setOffset_y(i,omnetpp::checked_int_cast<int>(value.intValue())); break;
+        case FIELD_offset_z: pp->setOffset_z(i,omnetpp::checked_int_cast<int>(value.intValue())); break;
+        case FIELD_obj_speed: pp->setObj_speed(i,omnetpp::checked_int_cast<int>(value.intValue())); break;
+        case FIELD_obj_heading: pp->setObj_heading(i,omnetpp::checked_int_cast<int>(value.intValue())); break;
         default: throw omnetpp::cRuntimeError("Cannot set field %d of class 'SdsmPayload'", field);
     }
 }

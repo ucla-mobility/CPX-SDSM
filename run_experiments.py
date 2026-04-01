@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Experiment runner for V2V simulation — REQUIRES ROS 2.
+Experiment runner for V2V simulation.
 
-Starts the ROS 2 UDP bridge (Docker or native), then runs all 9 simulations
-(Periodic, EventTriggered, Greedy × seeds 0, 1, 2). Results go to
-results/{Algorithm}/seed{N}/ with meta.json.
+Runs simulations (Periodic, EventTriggered, Greedy × seeds 0, 1, 2) in fast
+batch mode (no ROS bridge needed). GreedyROS requires a running ROS 2 bridge.
 
 Usage:
-  python run_experiments.py                    # all 9 runs (ROS 2 required)
+  python run_experiments.py                    # all runs (no bridge needed except GreedyROS)
   python run_experiments.py --algorithm Greedy
   python run_experiments.py --algorithm Greedy --seed 0
+  python run_experiments.py --algorithm GreedyROS --seed 0  # needs ROS 2 bridge
   python run_experiments.py --dry-run
 """
 
@@ -27,8 +27,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-ALGORITHMS = ["Periodic", "EventTriggered", "Greedy"]
-SEEDS = [0, 1, 2]
+ALGORITHMS = ["Periodic", "EventTriggered", "Greedy", "GreedyROS"]
+# Algorithms that require the ROS 2 bridge to be running
+ROS_ALGORITHMS = {"GreedyROS"}
+SEEDS = [0]
 SIM_DURATION_S = 300
 DEFAULT_NUM_VEHICLES = 400
 BRIDGE_UDP_PORT = 50010
@@ -478,48 +480,63 @@ def main() -> int:
             f.write(msg + "\n")
 
     if args.dry_run:
-        log("DRY RUN – ROS 2 bridge required. Would run:")
+        log("DRY RUN — would run:")
         for i, (algo, seed) in enumerate(runs, 1):
-            log(f"  {i}. {algo} seed={seed}")
+            ros_tag = " (ROS bridge required)" if algo in ROS_ALGORITHMS else ""
+            log(f"  {i}. {algo} seed={seed}{ros_tag}")
         log(f"Total: {len(runs)} run(s)")
         return 0
 
-    # --- Require ROS 2 bridge ---
-    we_started_docker, native_proc = ensure_ros2_bridge(root)
-    if not _bridge_running():
-        stop_ros2_bridge(we_started_docker, native_proc)
-        print(
-            "ERROR: ROS 2 bridge is required and could not be started.", file=sys.stderr
-        )
-        print("", file=sys.stderr)
-        print("Options:", file=sys.stderr)
-        print("  1. Docker: ensure 'ros2_ws' is built, then run:", file=sys.stderr)
-        print(
-            '     docker run -d --rm -v "$(pwd):/workspace" -p 50010:50010/udp -p 50000:50000/udp \\',
-            file=sys.stderr,
-        )
-        print(
-            "       --name veins_ros_bridge ros:humble-ros-base bash -c \\",
-            file=sys.stderr,
-        )
-        print(
-            "       'source /opt/ros/humble/setup.bash && source /workspace/ros2_ws/install/setup.bash && ros2 run veins_ros_bridge udp_bridge_node'",
-            file=sys.stderr,
-        )
-        print(
-            "  2. Native: source ROS 2 and ros2_ws, then in another terminal:",
-            file=sys.stderr,
-        )
-        print("     ros2 run veins_ros_bridge udp_bridge_node", file=sys.stderr)
-        print("     Then re-run this script.", file=sys.stderr)
-        return 1
+    # --- Only require ROS 2 bridge if any run needs it ---
+    needs_bridge = any(algo in ROS_ALGORITHMS for algo, _ in runs)
+    we_started_docker = False
+    native_proc = None
+
+    if needs_bridge:
+        we_started_docker, native_proc = ensure_ros2_bridge(root)
+        if not _bridge_running():
+            stop_ros2_bridge(we_started_docker, native_proc)
+            print(
+                "ERROR: ROS 2 bridge is required for GreedyROS and could not be started.",
+                file=sys.stderr,
+            )
+            print("", file=sys.stderr)
+            print("Options:", file=sys.stderr)
+            print(
+                "  1. Docker: ensure 'ros2_ws' is built, then run:",
+                file=sys.stderr,
+            )
+            print(
+                '     docker run -d --rm -v "$(pwd):/workspace" -p 50010:50010/udp -p 50000:50000/udp \\',
+                file=sys.stderr,
+            )
+            print(
+                "       --name veins_ros_bridge ros:humble-ros-base bash -c \\",
+                file=sys.stderr,
+            )
+            print(
+                "       'source /opt/ros/humble/setup.bash && source /workspace/ros2_ws/install/setup.bash && ros2 run veins_ros_bridge udp_bridge_node'",
+                file=sys.stderr,
+            )
+            print(
+                "  2. Native: source ROS 2 and ros2_ws, then in another terminal:",
+                file=sys.stderr,
+            )
+            print(
+                "     ros2 run veins_ros_bridge udp_bridge_node", file=sys.stderr
+            )
+            print("     Then re-run this script.", file=sys.stderr)
+            return 1
 
     def cleanup():
         stop_ros2_bridge(we_started_docker, native_proc)
 
     atexit.register(cleanup)
 
-    log("ROS 2 bridge is running. Starting experiments.")
+    if needs_bridge:
+        log("ROS 2 bridge is running. Starting experiments.")
+    else:
+        log("No ROS bridge needed. Starting experiments.")
     out_root.mkdir(parents=True, exist_ok=True)
     sim_results.mkdir(parents=True, exist_ok=True)
     with open(log_file, "a", encoding="utf-8") as f:
@@ -612,14 +629,14 @@ def main() -> int:
         dest_dir.mkdir(parents=True, exist_ok=True)
         prefix = f"{algo}-r{seed}"
         patterns = [
-            f"{prefix}-aoi.csv",
-            f"{prefix}-redundancy.csv",
+            f"{prefix}-rx.csv",
             f"{prefix}-txrx.csv",
             f"{prefix}-tx.csv",
-            f"{prefix}-rx.csv",
             f"{prefix}-timeseries.csv",
             f"{prefix}-metadata.csv",
             f"{prefix}-summary.csv",
+            f"{prefix}-vehicle-summary.csv",
+            f"{prefix}-ros-events.jsonl",
             f"{algo}-scalars.sca",
             f"{algo}-vectors.vec",
             f"{algo}-vectors.vci",

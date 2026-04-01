@@ -8,13 +8,12 @@ simple RosSDSMApp extends DemoBaseApplLayer
         @class(veins_ros_v2v::RosSDSMApp);
         double sendInterval @unit(s) = default(1s);
 
-        // --- ROS 2 bridge (always active) ---
-        // Every TX/RX event is forwarded to the ROS 2 UDP bridge as a
-        // JSON-encoded SAE J3224 SensorDataSharingMessage (CPX-SDSM).
-        // The bridge publishes proper sdsm_msgs/SensorDataSharingMessage
-        // on ROS 2 topics.
-        // rosControlEnabled is kept for backward compatibility but is
-        // ignored — the bridge is always on.
+        // --- ROS 2 bridge mode ---
+        // "off"  — no UDP sends, no listener threads (fast batch mode)
+        // "log"  — write JSON to a file instead of UDP (for post-sim ROS replay)
+        // "live" — real-time UDP to bridge (original behavior)
+        string rosBridgeMode    = default("off");
+        // rosControlEnabled is kept for backward compatibility but is ignored.
         bool   rosControlEnabled = default(true);
         string rosRemoteHost     = default("127.0.0.1");
         int    rosCmdPortBase    = default(50000);   // each vehicle binds to (base + nodeIndex)
@@ -36,18 +35,26 @@ simple RosSDSMApp extends DemoBaseApplLayer
         double greedyAlphaHeading     = default(0.1);      // weight: heading change (radians)
         double greedyW1               = default(1.0);      // utility weight: self-change term
         double greedyW2               = default(0.5);      // utility weight: time-since-send (AoI proxy)
-        double greedyW3               = default(0.3);      // utility weight: congestion penalty
+        double greedyW3               = default(0.3);      // utility weight: congestion penalty (true PHY CBR)
+        double greedyW4               = default(0.0);      // utility weight: object-set novelty (0=disabled)
         double greedyThreshold        = default(1.0);      // utility must exceed this to trigger send
         double greedyMinInterval @unit(s) = default(0.2s); // minimum inter-send time (guard)
         double greedyMaxInterval @unit(s) = default(5.0s); // maximum silence (starvation prevention)
-        double congestionWindow  @unit(s) = default(1.0s); // sliding window for RX count
+        double congestionWindow  @unit(s) = default(1.0s); // CBR measurement window
         double redundancyEpsilon      = default(0.5);      // receiver-side novelty threshold
+
+        // --- Multi-object SDSM ---
+        int    maxObjectsPerSdsm      = default(16);       // max detected objects per message (J3224: up to 256)
+        double detectionRange @unit(m) = default(300m);     // include neighbors within this range
+        double detectionMaxAge @unit(s) = default(2s);      // discard neighbors not heard for this long
 
         // --- CSV metrics logging ---
         bool   csvLoggingEnabled       = default(true);
+        bool   txrxLogEnabled          = default(false);       // txrx.csv is redundant with tx.csv + rx.csv
+        int    rxLogEveryNth           = default(1);          // log every Nth receive to rx.csv (1=all, 2=half → ~30MB for EventTriggered)
         string logPrefix              = default("default");   // filename prefix for CSV outputs
         int    runNumber               = default(0);           // set to ${runnumber} in ini for unique per-seed files
-        double timeseriesSampleInterval @unit(s) = default(0.1s);  // interval for timeseries CSV sampling
+        double timeseriesSampleInterval @unit(s) = default(1.0s);  // interval for timeseries CSV sampling
 
         @display("i=block/app");
 }

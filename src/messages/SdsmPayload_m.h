@@ -50,7 +50,7 @@ namespace messages {
  *     int source_id[4];             // 4-byte anonymized sender ID
  *     int equipment_type = 2;        // 0=unknown, 1=RSU, 2=OBU, 3=VRU
  * 
- *     // Reference position (sender) — meters in sim (CPX Position3D uses lat/lon; we use x,y,z for SUMO)
+ *     // Reference position (sender) — meters in sim
  *     double ref_pos_x = 0;
  *     double ref_pos_y = 0;
  *     double ref_pos_z = 0;
@@ -59,20 +59,15 @@ namespace messages {
  *     int sdsm_day = 1;              // 1-31
  *     long sdsm_time_of_day_ms = 0;   // ms since midnight
  * 
- *     // === One detected object (CPX DetectedObjectData: common + vehicle) ===
- *     int obj_type = 1;              // 1=vehicle
- *     int obj_type_cfd = 100;
- *     int object_id = 0;
- *     int measurement_time = 0;      // ms offset from sdsm_time
- *     int offset_x = 0;              // 0.1 m units
- *     int offset_y = 0;
- *     int offset_z = 0;
- *     int speed = 0;                 // 0.02 m/s units (J2735)
- *     int heading = 0;               // 0.0125 deg units, 28800=unavailable
- *     int det_obj_opt_kind = 1;      // 1=vehicle
- *     bool has_vehicle_size = true;
- *     int vehicle_width_cm = 180;
- *     int vehicle_length_cm = 450;
+ *     // === Detected objects array (up to 16 per J3224) ===
+ *     int numObjects = 0;            // actual count of objects in this message (0..16)
+ *     int obj_type[16];              // 1=vehicle per object
+ *     int object_id[16];             // node index of detected object
+ *     int offset_x[16];              // position offset from ref_pos, 0.1 m units
+ *     int offset_y[16];
+ *     int offset_z[16];
+ *     int obj_speed[16];             // 0.02 m/s units (J2735)
+ *     int obj_heading[16];           // 0.0125 deg units, 28800=unavailable
  * }
  * </pre>
  */
@@ -95,19 +90,14 @@ class SdsmPayload : public ::omnetpp::cPacket
     double ref_pos_z = 0;
     int sdsm_day = 1;
     long sdsm_time_of_day_ms = 0;
-    int obj_type = 1;
-    int obj_type_cfd = 100;
-    int object_id = 0;
-    int measurement_time = 0;
-    int offset_x = 0;
-    int offset_y = 0;
-    int offset_z = 0;
-    int speed = 0;
-    int heading = 0;
-    int det_obj_opt_kind = 1;
-    bool has_vehicle_size = true;
-    int vehicle_width_cm = 180;
-    int vehicle_length_cm = 450;
+    int numObjects = 0;
+    int obj_type[16] = {0};
+    int object_id[16] = {0};
+    int offset_x[16] = {0};
+    int offset_y[16] = {0};
+    int offset_z[16] = {0};
+    int obj_speed[16] = {0};
+    int obj_heading[16] = {0};
 
   private:
     void copy(const SdsmPayload& other);
@@ -173,44 +163,36 @@ class SdsmPayload : public ::omnetpp::cPacket
     virtual long getSdsm_time_of_day_ms() const;
     virtual void setSdsm_time_of_day_ms(long sdsm_time_of_day_ms);
 
-    virtual int getObj_type() const;
-    virtual void setObj_type(int obj_type);
+    virtual int getNumObjects() const;
+    virtual void setNumObjects(int numObjects);
 
-    virtual int getObj_type_cfd() const;
-    virtual void setObj_type_cfd(int obj_type_cfd);
+    virtual size_t getObj_typeArraySize() const;
+    virtual int getObj_type(size_t k) const;
+    virtual void setObj_type(size_t k, int obj_type);
 
-    virtual int getObject_id() const;
-    virtual void setObject_id(int object_id);
+    virtual size_t getObject_idArraySize() const;
+    virtual int getObject_id(size_t k) const;
+    virtual void setObject_id(size_t k, int object_id);
 
-    virtual int getMeasurement_time() const;
-    virtual void setMeasurement_time(int measurement_time);
+    virtual size_t getOffset_xArraySize() const;
+    virtual int getOffset_x(size_t k) const;
+    virtual void setOffset_x(size_t k, int offset_x);
 
-    virtual int getOffset_x() const;
-    virtual void setOffset_x(int offset_x);
+    virtual size_t getOffset_yArraySize() const;
+    virtual int getOffset_y(size_t k) const;
+    virtual void setOffset_y(size_t k, int offset_y);
 
-    virtual int getOffset_y() const;
-    virtual void setOffset_y(int offset_y);
+    virtual size_t getOffset_zArraySize() const;
+    virtual int getOffset_z(size_t k) const;
+    virtual void setOffset_z(size_t k, int offset_z);
 
-    virtual int getOffset_z() const;
-    virtual void setOffset_z(int offset_z);
+    virtual size_t getObj_speedArraySize() const;
+    virtual int getObj_speed(size_t k) const;
+    virtual void setObj_speed(size_t k, int obj_speed);
 
-    virtual int getSpeed() const;
-    virtual void setSpeed(int speed);
-
-    virtual int getHeading() const;
-    virtual void setHeading(int heading);
-
-    virtual int getDet_obj_opt_kind() const;
-    virtual void setDet_obj_opt_kind(int det_obj_opt_kind);
-
-    virtual bool getHas_vehicle_size() const;
-    virtual void setHas_vehicle_size(bool has_vehicle_size);
-
-    virtual int getVehicle_width_cm() const;
-    virtual void setVehicle_width_cm(int vehicle_width_cm);
-
-    virtual int getVehicle_length_cm() const;
-    virtual void setVehicle_length_cm(int vehicle_length_cm);
+    virtual size_t getObj_headingArraySize() const;
+    virtual int getObj_heading(size_t k) const;
+    virtual void setObj_heading(size_t k, int obj_heading);
 };
 
 inline void doParsimPacking(omnetpp::cCommBuffer *b, const SdsmPayload& obj) {obj.parsimPack(b);}
