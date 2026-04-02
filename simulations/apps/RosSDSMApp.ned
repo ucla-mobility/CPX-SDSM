@@ -29,6 +29,9 @@ simple RosSDSMApp extends DemoBaseApplLayer
         //   - DCC-like congestion-aware adaptation (ETSI TS 102 687)
         // ==================================================================
         bool   greedyEnabled          = default(false);    // true=greedy, false=periodic baseline
+        bool   hybridEnabled          = default(false);    // true=Hybrid ETSI+VoI+redundancy policy
+        bool   bsmImpliedMode         = default(false);    // true=send SDSM header/state only (no object list)
+        bool   useVoiObjectSelection  = default(false);    // rank objects by VoI score when true
         double greedyTickInterval @unit(s) = default(0.1s); // how often to evaluate send decision
         double greedyAlphaPos         = default(1.0);      // weight: position change (meters)
         double greedyAlphaSpeed       = default(0.5);      // weight: speed change (m/s)
@@ -42,6 +45,16 @@ simple RosSDSMApp extends DemoBaseApplLayer
         double greedyMaxInterval @unit(s) = default(5.0s); // maximum silence (starvation prevention)
         double congestionWindow  @unit(s) = default(1.0s); // CBR measurement window
         double redundancyEpsilon      = default(0.5);      // receiver-side novelty threshold
+        double hybridThreshold        = default(1.2);      // hybrid utility threshold
+        double hybridRedundancyWindow @unit(s) = default(1s); // sender-side object resend suppression window
+        double hybridWSelf            = default(1.0);      // hybrid utility: self-change
+        double hybridWTime            = default(0.4);      // hybrid utility: freshness
+        double hybridWCBR             = default(0.4);      // hybrid utility: congestion penalty
+        double hybridWObj             = default(0.6);      // hybrid utility: object novelty
+        double hybridVoiDistWeight    = default(0.6);      // VoI term: distance priority
+        double hybridVoiAgeWeight     = default(0.3);      // VoI term: stale object priority
+        double hybridVoiRelSpeedWeight = default(0.1);     // VoI term: relative speed priority
+        double hybridMinVoi           = default(0.0);      // minimum VoI required for inclusion
 
         // --- Multi-object SDSM ---
         int    maxObjectsPerSdsm      = default(16);       // max detected objects per message (J3224: up to 256)

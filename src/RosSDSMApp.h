@@ -51,7 +51,9 @@ protected:
 private:
     void sendSdsmOnce(const std::string& overridePayload = "", const std::string& triggerReason = "periodic");
     void evaluateGreedySend();
+    void evaluateHybridSend();
     double computeObjectSetChange() const;
+    double computeVoiScore(double dist, double age, double relSpeed, double novelty) const;
 
     void startUdpListener();
     void stopUdpListener();
@@ -80,6 +82,9 @@ private:
     bool periodicEnabled_ = true;
 
     bool greedyEnabled_ = false;
+    bool hybridEnabled_ = false;
+    bool bsmImpliedMode_ = false;
+    bool useVoiObjectSelection_ = false;
     simtime_t greedyTickInterval_ = 0.1;
     double greedyAlphaPos_ = 1.0;
     double greedyAlphaSpeed_ = 0.5;
@@ -93,6 +98,16 @@ private:
     simtime_t greedyMaxInterval_ = 5.0;
     simtime_t congestionWindow_ = 1.0;
     double redundancyEpsilon_ = 0.5;
+    double hybridThreshold_ = 1.0;
+    simtime_t hybridRedundancyWindow_ = 1.0;
+    double hybridWSelf_ = 1.0;
+    double hybridWTime_ = 0.4;
+    double hybridWCBR_ = 0.4;
+    double hybridWObj_ = 0.6;
+    double hybridVoiDistWeight_ = 0.6;
+    double hybridVoiAgeWeight_ = 0.3;
+    double hybridVoiRelSpeedWeight_ = 0.1;
+    double hybridMinVoi_ = 0.0;
 
     // Multi-object SDSM parameters
     int maxObjectsPerSdsm_ = 16;
@@ -138,6 +153,13 @@ private:
 
     // Snapshot of perception set at last TX (for object-set novelty trigger)
     std::map<int, NeighborInfo> lastSentPerceptionSet_;
+    struct ObjectTxState {
+        double x = 0;
+        double y = 0;
+        double speed = 0;
+        simtime_t lastTxTime;
+    };
+    std::map<int, ObjectTxState> objectLastIncluded_;
 
     // True PHY CBR via Mac1609_4::sigChannelBusy signal
     simsignal_t sigChannelBusy_;

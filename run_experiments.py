@@ -2,7 +2,7 @@
 """
 Experiment runner for V2V simulation.
 
-Runs simulations (Periodic, EventTriggered, Greedy × seeds 0, 1, 2) in fast
+Runs simulations (Periodic, EventTriggered, Greedy, GreedyBSMImplied, HybridSDSM × seeds) in fast
 batch mode (no ROS bridge needed). GreedyROS requires a running ROS 2 bridge.
 
 Usage:
@@ -27,7 +27,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-ALGORITHMS = ["Periodic", "EventTriggered", "Greedy", "GreedyROS"]
+ALGORITHMS = ["Periodic", "EventTriggered", "Greedy", "GreedyBSMImplied", "HybridSDSM", "GreedyROS"]
 # Algorithms that require the ROS 2 bridge to be running
 ROS_ALGORITHMS = {"GreedyROS"}
 SEEDS = [0]

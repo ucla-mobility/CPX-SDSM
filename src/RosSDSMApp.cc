@@ -263,6 +263,9 @@ void RosSDSMApp::initialize(int stage) {
         (void)par("rosControlEnabled").boolValue();
 
         greedyEnabled_ = par("greedyEnabled").boolValue();
+        hybridEnabled_ = par("hybridEnabled").boolValue();
+        bsmImpliedMode_ = par("bsmImpliedMode").boolValue();
+        useVoiObjectSelection_ = par("useVoiObjectSelection").boolValue();
         greedyTickInterval_ = par("greedyTickInterval");
         greedyAlphaPos_ = par("greedyAlphaPos").doubleValue();
         greedyAlphaSpeed_ = par("greedyAlphaSpeed").doubleValue();
@@ -276,6 +279,16 @@ void RosSDSMApp::initialize(int stage) {
         greedyMaxInterval_ = par("greedyMaxInterval");
         congestionWindow_ = par("congestionWindow");
         redundancyEpsilon_ = par("redundancyEpsilon").doubleValue();
+        hybridThreshold_ = par("hybridThreshold").doubleValue();
+        hybridRedundancyWindow_ = par("hybridRedundancyWindow");
+        hybridWSelf_ = par("hybridWSelf").doubleValue();
+        hybridWTime_ = par("hybridWTime").doubleValue();
+        hybridWCBR_ = par("hybridWCBR").doubleValue();
+        hybridWObj_ = par("hybridWObj").doubleValue();
+        hybridVoiDistWeight_ = par("hybridVoiDistWeight").doubleValue();
+        hybridVoiAgeWeight_ = par("hybridVoiAgeWeight").doubleValue();
+        hybridVoiRelSpeedWeight_ = par("hybridVoiRelSpeedWeight").doubleValue();
+        hybridMinVoi_ = par("hybridMinVoi").doubleValue();
 
         maxObjectsPerSdsm_ = par("maxObjectsPerSdsm").intValue();
         if (maxObjectsPerSdsm_ > 16) maxObjectsPerSdsm_ = 16;
@@ -397,7 +410,10 @@ void RosSDSMApp::handleSelfMsg(cMessage* msg) {
     }
 
     if (msg == sendTimer_) {
-        if (greedyEnabled_) {
+        if (hybridEnabled_) {
+            evaluateHybridSend();
+            scheduleAt(simTime() + greedyTickInterval_, sendTimer_);
+        } else if (greedyEnabled_) {
             evaluateGreedySend();
             scheduleAt(simTime() + greedyTickInterval_, sendTimer_);
         } else {
@@ -455,6 +471,18 @@ double RosSDSMApp::computeObjectSetChange() const {
 }
 
 
+double RosSDSMApp::computeVoiScore(double dist, double age, double relSpeed, double novelty) const {
+    const double distTerm = 1.0 / (1.0 + std::max(0.0, dist));
+    const double ageNorm = detectionMaxAge_ > 0 ? std::min(1.0, std::max(0.0, age / detectionMaxAge_)) : 0.0;
+    const double relSpeedNorm = std::min(1.0, std::fabs(relSpeed) / 20.0);
+    const double noveltyNorm = std::min(1.0, std::max(0.0, novelty / 10.0));
+    return hybridVoiDistWeight_ * distTerm
+         + hybridVoiAgeWeight_ * ageNorm
+         + hybridVoiRelSpeedWeight_ * relSpeedNorm
+         + 0.2 * noveltyNorm;
+}
+
+
 void RosSDSMApp::evaluateGreedySend() {
     // U = w1*selfChange + w4*objectSetChange + w2*timeSinceSend - w3*CBR
 
@@ -499,6 +527,56 @@ void RosSDSMApp::evaluateGreedySend() {
 
     if (shouldSend) {
         EV_INFO << "[RosSDSMApp] GREEDY SEND node=" << nodeIndex_
+                << " reason=" << reason
+                << " U=" << utility
+                << " selfChg=" << selfChange
+                << " objChg=" << objectSetChange
+                << " tSince=" << timeSinceSend
+                << " CBR=" << currentCBR_ << "\n";
+        sendSdsmOnce("", reason);
+    }
+}
+
+
+void RosSDSMApp::evaluateHybridSend() {
+    // Hybrid utility:
+    // U = wSelf*selfChange + wObj*objectSetChange + wTime*timeSinceSend - wCBR*CBR
+    const auto pos = mobility->getPositionAt(simTime());
+    const double spd = mobility->getSpeed();
+    const double timeSinceSend = (simTime() - lastSentTime_).dbl();
+
+    const double dx = pos.x - lastSentX_;
+    const double dy = pos.y - lastSentY_;
+    const double posDelta = std::sqrt(dx * dx + dy * dy);
+    const double spdDelta = std::fabs(spd - lastSentSpeed_);
+
+    double heading = lastSentHeading_;
+    if (posDelta > 0.1) heading = std::atan2(dy, dx);
+    double headingDelta = std::fabs(heading - lastSentHeading_);
+    if (headingDelta > M_PI) headingDelta = 2.0 * M_PI - headingDelta;
+
+    const double selfChange = greedyAlphaPos_ * posDelta
+                            + greedyAlphaSpeed_ * spdDelta
+                            + greedyAlphaHeading_ * headingDelta;
+    const double objectSetChange = computeObjectSetChange();
+
+    const double utility = hybridWSelf_ * selfChange
+                         + hybridWObj_ * objectSetChange
+                         + hybridWTime_ * timeSinceSend
+                         - hybridWCBR_ * currentCBR_;
+
+    bool shouldSend = false;
+    const char* reason = "none";
+    if (timeSinceSend >= greedyMaxInterval_.dbl()) {
+        shouldSend = true;
+        reason = "hybridMaxInterval";
+    } else if (utility > hybridThreshold_ && timeSinceSend >= greedyMinInterval_.dbl()) {
+        shouldSend = true;
+        reason = "hybridUtility";
+    }
+
+    if (shouldSend) {
+        EV_INFO << "[RosSDSMApp] HYBRID SEND node=" << nodeIndex_
                 << " reason=" << reason
                 << " U=" << utility
                 << " selfChg=" << selfChange
@@ -587,17 +665,63 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
         candidates.push_back({kv.first, dist, &kv.second});
     }
 
-    // Sort by distance (closest first), take top-K
-    std::sort(candidates.begin(), candidates.end(),
-              [](const DetCandidate& a, const DetCandidate& b) { return a.dist < b.dist; });
-    int numObj = static_cast<int>(std::min(static_cast<size_t>(maxObjectsPerSdsm_), candidates.size()));
+    // Pick object list policy:
+    // - BSM-implied mode: send no cooperative object list.
+    // - Hybrid/VoI mode: score by lightweight VoI and filter redundant objects.
+    // - Default mode: distance-topK (existing behavior).
+    std::vector<DetCandidate> selected;
+    if (!bsmImpliedMode_) {
+        const bool useVoi = hybridEnabled_ || useVoiObjectSelection_;
+        if (useVoi) {
+            struct ScoredCandidate {
+                DetCandidate det;
+                double score = 0.0;
+            };
+            std::vector<ScoredCandidate> scored;
+            scored.reserve(candidates.size());
+
+            for (const auto& c : candidates) {
+                const NeighborInfo& ni = *c.info;
+                const double age = now - ni.lastRxTime.dbl();
+                const double relSpeed = ni.speed - spd;
+
+                double novelty = 10.0;
+                bool recentlyReported = false;
+                auto itTx = objectLastIncluded_.find(c.id);
+                if (itTx != objectLastIncluded_.end()) {
+                    const double ndx = ni.x - itTx->second.x;
+                    const double ndy = ni.y - itTx->second.y;
+                    novelty = std::sqrt(ndx * ndx + ndy * ndy) + std::fabs(ni.speed - itTx->second.speed);
+                    recentlyReported = (simTime() - itTx->second.lastTxTime).dbl() <= hybridRedundancyWindow_.dbl();
+                }
+
+                if (recentlyReported && novelty < redundancyEpsilon_) continue;
+
+                const double score = computeVoiScore(c.dist, age, relSpeed, novelty);
+                if (score >= hybridMinVoi_) scored.push_back({c, score});
+            }
+
+            std::sort(scored.begin(), scored.end(),
+                      [](const ScoredCandidate& a, const ScoredCandidate& b) { return a.score > b.score; });
+            const size_t take = std::min(static_cast<size_t>(maxObjectsPerSdsm_), scored.size());
+            selected.reserve(take);
+            for (size_t i = 0; i < take; i++) selected.push_back(scored[i].det);
+        } else {
+            std::sort(candidates.begin(), candidates.end(),
+                      [](const DetCandidate& a, const DetCandidate& b) { return a.dist < b.dist; });
+            const size_t take = std::min(static_cast<size_t>(maxObjectsPerSdsm_), candidates.size());
+            selected.insert(selected.end(), candidates.begin(), candidates.begin() + take);
+        }
+    }
+
+    int numObj = static_cast<int>(selected.size());
     payload->setNumObjects(numObj);
 
     // Save perception set snapshot for object-novelty trigger
     lastSentPerceptionSet_.clear();
 
     for (int i = 0; i < numObj; i++) {
-        const auto& c = candidates[i];
+        const auto& c = selected[i];
         const NeighborInfo& ni = *c.info;
 
         payload->setObj_type(i, 1);  // vehicle
@@ -613,6 +737,7 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
             ? static_cast<int>(std::round(hdgDeg / 0.0125)) : 28800);
 
         lastSentPerceptionSet_[c.id] = ni;
+        objectLastIncluded_[c.id] = {ni.x, ni.y, ni.speed, simTime()};
     }
 
     // Realistic packet size: base header + per-object data

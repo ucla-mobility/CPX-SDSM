@@ -83,6 +83,36 @@ Where:
 > - ETSI TS 102 687, "Intelligent Transport Systems (ITS); Decentralized Congestion Control Mechanisms," v1.2.1, 2018. *(CBR-based congestion adaptation)*
 > - C. Sommer et al., 2011. *(Adaptive beaconing / self-change term)*
 
+### GreedyBSMImplied (Ablation)
+
+Greedy scheduling is kept unchanged, but the cooperative object list is explicitly disabled (`num_objects_sent = 0`), so packets behave like a BSM-implied state-sharing mode.
+
+Why this exists:
+- Isolates **message-content effect** from scheduler effect.
+- Lets you compare object-level SDSM versus state-only communication under identical send timing.
+
+### HybridSDSM (New policy)
+
+Hybrid sender policy that combines:
+
+1. **ETSI-style kinematic trigger utility** (self-change + freshness),
+2. **Congestion penalty** via measured PHY CBR,
+3. **Object-level VoI ranking** for top-K packing,
+4. **Sender-side redundancy suppression** window before re-sending nearly unchanged objects.
+
+Decision utility:
+
+```
+U_hybrid = w_self * selfChange + w_obj * objectSetChange + w_time * timeSinceSend - w_cbr * CBR
+```
+
+Object selection uses a lightweight VoI score from distance, staleness, relative speed, and novelty from last transmitted state.
+
+> **Policy references used to design this hybrid:**
+> - ETSI TR 103 562 / ETSI TS 103 324 (CPM generation logic and thresholds).
+> - T. Thandavarayan et al., Look-Ahead + Redundancy Mitigation (LARM), *Journal of Network and Computer Applications*, 2023.
+> - X. Lyu et al., VoI-based CPM object prioritization, *IEEE VNC*, 2025 (best paper).
+
 ---
 
 ## SDSM Message Structure
@@ -169,6 +199,8 @@ Update the SUMO path in `simulations/omnetpp.ini` under `*.manager.commandLine` 
 python3 run_experiments.py --algorithm Periodic --sim-duration 90
 python3 run_experiments.py --algorithm EventTriggered --sim-duration 90
 python3 run_experiments.py --algorithm Greedy --sim-duration 90
+python3 run_experiments.py --algorithm GreedyBSMImplied --sim-duration 90
+python3 run_experiments.py --algorithm HybridSDSM --sim-duration 90
 ```
 
 ### All non-ROS algorithms
@@ -207,11 +239,20 @@ Configurable via `simulations/omnetpp.ini` or NED defaults in `simulations/apps/
 |-----------|---------|-------------|
 | `sendInterval` | 1 s (0.1 s for Periodic) | Periodic broadcast interval |
 | `greedyEnabled` | false | Enable utility-based dissemination |
+| `hybridEnabled` | false | Enable HybridSDSM policy |
+| `bsmImpliedMode` | false | Force zero-object payload (BSM-implied mode) |
+| `useVoiObjectSelection` | false | Use VoI ranking for object selection |
 | `greedyW1` | 1.0 | Self-change weight |
 | `greedyW2` | 0.5 | AoI freshness weight |
 | `greedyW3` | 0.3 | CBR congestion penalty weight |
 | `greedyW4` | 0.0 | Object-set novelty weight |
 | `greedyThreshold` | 1.0 | Utility threshold to trigger send |
+| `hybridThreshold` | 1.2 | Hybrid utility threshold |
+| `hybridRedundancyWindow` | 1.0 s | Sender-side object resend suppression window |
+| `hybridVoiDistWeight` | 0.6 | VoI distance term weight |
+| `hybridVoiAgeWeight` | 0.3 | VoI staleness term weight |
+| `hybridVoiRelSpeedWeight` | 0.1 | VoI relative-speed term weight |
+| `hybridMinVoi` | 0.0 | Minimum VoI score for object inclusion |
 | `greedyMinInterval` | 0.2 s | Minimum inter-send guard |
 | `greedyMaxInterval` | 5.0 s | Maximum silence (starvation prevention) |
 | `congestionWindow` | 1.0 s | CBR measurement window |
