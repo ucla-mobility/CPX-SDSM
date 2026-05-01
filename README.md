@@ -33,6 +33,127 @@ Each **TraCI step (0.1 s)** SUMO advances vehicles; Veins syncs OMNeT++ `Car` mo
 
 ---
 
+## Implementation parameters (reference)
+
+**Authoritative definitions:** `simulations/apps/RosSDSMApp.ned` (all `appl.*` defaults), `simulations/omnetpp.ini` (world + PHY + per-`[Config]` overrides), `simulations/config.xml` (analogue models), `sumo/scenario.sumo.cfg` (SUMO horizon / step).
+
+### Experiment runner (`run_experiments.py`)
+
+| Symbol / flag | Typical value | Notes |
+|---------------|---------------|--------|
+| `SIM_DURATION_S` | **300** | Default wall-clock sim horizon unless overridden |
+| `DEFAULT_NUM_VEHICLES` | **400** | Canonical density; routes regenerated via `sumo/gen_ucla_routes.py` → `sumo/routes.rou.xml` |
+| `--seed` / `runnumber` | e.g. **0** | Drives `*.node[*].appl.runNumber = ${runnumber}` and reproducibility |
+| `SEEDS` | `0..9` | Full multi-seed sweep when you run without narrowing `--seed` |
+
+### SUMO (`sumo/scenario.sumo.cfg`)
+
+| Parameter | Value |
+|-----------|--------|
+| `begin` | 0 |
+| `end` | **300** (s) |
+| `step-length` | **0.1** (s) |
+
+### OMNeT++ network & TraCI (`simulations/omnetpp.ini` `[General]`)
+
+| Parameter | Value |
+|-----------|--------|
+| `network` | `networks.TwoCarsScenario` |
+| `sim-time-limit` | **300 s** |
+| `seed-set` | `${runnumber}` |
+| `repeat` | **1** |
+| `*.manager.updateInterval` | **0.1 s** |
+| `*.world.playgroundSize{X,Y,Z}` | **1300 m**, **1000 m**, **50 m** |
+| `*.connectionManager.maxInterfDist` | **1500 m** |
+| `*.node[*].nic.phy80211p.noiseFloor` | **−98 dBm** |
+| `*.node[*].nic.phy80211p.minPowerLevel` | **−110 dBm** |
+| `*.node[*].nic.mac1609_4.txPower` | **100 mW** |
+
+### PHY analogue models (`simulations/config.xml`)
+
+| Model | Parameters |
+|-------|------------|
+| `SimplePathlossModel` | **α = 2.75**, thresholding on |
+| `NakagamiFading` | **m = 1.5**, `constM = true` |
+| `Decider80211p` | **5.89 GHz** center frequency |
+
+### `RosSDSMApp` — mode switches (NED defaults; override in `omnetpp.ini`)
+
+| Parameter | Default | Role |
+|-----------|---------|------|
+| `sendInterval` | **1 s** | Base interval; **[Config Periodic]** sets **0.1 s** |
+| `periodicEnabled` | true | Periodic path vs greedy-driven |
+| `greedyEnabled` | false | v1 weighted-sum greedy |
+| `hybridEnabled` | false | v1 / v2 hybrid |
+| `hybridVariant` | `"v1"` | **`"v2"`** for HybridSDSM_v2 |
+| `greedyVariant` | `"v1"` | **`"v2"`** for Greedy_v2 (shared scheduler with Hybrid v2) |
+| `bsmImpliedMode` | false | Header-only / zero-object ablation |
+| `useVoiObjectSelection` | false | Legacy VoI object ranking (v1 hybrid path) |
+| `rosBridgeMode` | `"off"` | **`"off"`** / `"log"` / `"live"` |
+
+### Greedy / hybrid v1 utility (NED + `[General]` in `omnetpp.ini`)
+
+| Parameter | Default (NED) | Typical `[General]` |
+|-----------|---------------|---------------------|
+| `greedyTickInterval` | 0.1 s | 0.1 s |
+| `greedyAlphaPos` / `greedyAlphaSpeed` / `greedyAlphaHeading` | 1.0 / 0.5 / 0.1 | same |
+| `greedyW1` / `greedyW2` / `greedyW3` / `greedyW4` | 1.0 / 0.5 / 0.3 / **0.0** | W4 often **0.5** in `[Config Greedy]` |
+| `greedyThreshold` | 1.0 | same |
+| `greedyMinInterval` / `greedyMaxInterval` | **0.2 s** / **5.0 s** | same |
+| `congestionWindow` | 1.0 s | same |
+| `cbrEwmaAlpha` | **0.3** | (NED only; not duplicated in ini) |
+| `redundancyEpsilon` | **0.5** | receiver-side sender-state redundancy |
+| `hybridThreshold` | 1.2 | v1 hybrid |
+| `hybridRedundancyWindow` | 1 s | v1 sender object resend suppression |
+| `hybridWSelf` / `hybridWTime` / `hybridWCBR` / `hybridWObj` | 1.0 / 0.4 / 0.4 / 0.6 | v1 hybrid utility weights |
+| `hybridVoiDistWeight` / `hybridVoiAgeWeight` / `hybridVoiRelSpeedWeight` | 0.6 / 0.3 / 0.1 | v1 VoI terms |
+| `hybridMinVoi` | 0.0 | v1 VoI floor |
+
+### Multi-object SDSM caps & sensing window
+
+| Parameter | `[General]` | **`[Config Greedy_v2]` / `[Config HybridSDSM_v2]`** |
+|-----------|-------------|-----------------------------------------------------|
+| `maxObjectsPerSdsm` | **16** | **32** |
+| `K_max` | **32** (NED default) | **32** (explicit in v2 configs) |
+| `detectionRange` | **300 m** | (inherits) |
+| `detectionMaxAge` | **2 s** | (inherits) |
+
+### v2 parallel-threshold scheduler + Hybrid object pipeline (NED defaults)
+
+Used when `greedyVariant="v2"` and/or `hybridVariant="v2"`. Values below are **defaults** unless you uncomment overrides in `omnetpp.ini` under the v2 configs.
+
+| Group | Parameter | Default |
+|-------|-----------|---------|
+| **Normalize** | `refSelfChange` | **10.0** |
+| | `refDist` | **5.0** |
+| | `T_max` | **5.0 s** (backstop / time term scale) |
+| | `K_max` | **32** (object-set change denominator) |
+| | `alpha_p` / `alpha_v` / `alpha_h` | **1.0** / **0.5** / **2.0** |
+| **Thresholds** | `tau_self` / `tau_obj` / `tau_time` / `tau_cbr` | **0.4** / **0.4** / **0.5** / **0.6** |
+| **VoI (Lyu-style)** | `w_novelty` / `w_quality` | **0.5** / **0.5** |
+| | `tau_decay` / `tau_quality` | **1.5 s** / **2.0 s** |
+| | `d_ref` | **50 m** |
+| **Confidence (future)** | `p_highConfidence` / `tau_conf` | **0.85** / **0.5** (inactive at `conf=1.0` in code today) |
+| **Spatial association** | `assocCoarseGate` | **5 m** |
+| | `assocChiSquaredThreshold` | **13.28** |
+| | `assocSigmaPosSquared` / `assocSigmaVelSquared` | **1.0** / **0.25** |
+| | `assocPruneAge` | **3 s** |
+| **Redundancy (LARM-inspired)** | `redundancyWindow` | **0.5 s** |
+
+### Logging
+
+| Parameter | Default | Notes |
+|-----------|---------|--------|
+| `csvLoggingEnabled` | true | Master CSV switch |
+| `txrxLogEnabled` | false | Combined TX/RX stream |
+| `rxLogEveryNth` | **1** | e.g. **2** in `[Config EventTriggered]` to thin `rx.csv` |
+| `logPrefix` | `"default"` | Per-`[Config]` → `Periodic`, `Greedy_v2`, etc. |
+| `runNumber` | 0 | Set to **`${runnumber}`** in ini |
+| `timeseriesSampleInterval` | **1.0 s** | `*-timeseries.csv` cadence |
+| Object-AoI sampler interval | **0.1 s** | Hard-coded in `RosSDSMApp` (`objectAoiSampleInterval_`); not a NED parameter |
+
+---
+
 ## Algorithms
 
 ### Canonical v2 (primary comparison)
@@ -41,9 +162,9 @@ All three share the **same PHY/MAC, SDSM schema, and (for the two adaptive polic
 
 | Algorithm | When to send | What goes in the SDSM (objects) |
 |-----------|--------------|----------------------------------|
-| **`Periodic`** | Fixed **10 Hz** (`sendInterval = 0.1 s`) | **Distance top‑K** (closest neighbors first), **K ≤ 32** |
-| **`Greedy_v2`** | **`evaluateV2Schedule`:** parallel thresholds on self-change, object-set change, time; **OR** combine; **CBR suppressor**; **backstop** at **T_max**; **min inter-send** (backstop can override) | **Distance top‑K**, **K ≤ 32** |
-| **`HybridSDSM_v2`** | **Same scheduler code** as `Greedy_v2` (reason prefix `hybrid_*` vs `greedy_*` in `*-triggers.csv`) | **RX spatial association** → **LARM-style redundancy window** → **Lyu-style VoI** → **top‑K**; **confidence** is **`conf = 1.0`** until a perception module supplies scores |
+| **`Periodic`** | Fixed **10 Hz** (`sendInterval = 0.1 s`) | **Distance top‑K**; payload capped by **`maxObjectsPerSdsm`** (**16** under default `[General]`, unless you raise it for fair payload size) |
+| **`Greedy_v2`** | **`evaluateV2Schedule`:** parallel thresholds on self-change, object-set change, time; **OR** combine; **CBR suppressor**; **backstop** at **T_max**; **min inter-send** (backstop can override) | **Distance top‑K**; **`maxObjectsPerSdsm = 32`** and **`K_max = 32`** in `[Config Greedy_v2]` |
+| **`HybridSDSM_v2`** | **Same scheduler code** as `Greedy_v2` (reason prefix `hybrid_*` vs `greedy_*` in `*-triggers.csv`) | **RX spatial association** → **LARM-style redundancy window** → **Lyu-style VoI** → **top‑K**; **`maxObjectsPerSdsm = 32`**; **confidence** is **`conf = 1.0`** until a perception module supplies scores |
 
 **Factor isolation**
 
@@ -60,7 +181,7 @@ Scheduler logic is **ETSI TS 103 324 / TS 102 687–inspired**, not a conformanc
 
 ## SDSM payload (J3224-aligned)
 
-- Up to **`K_max = 32`** objects; **`SDSM_PER_OBJECT_BYTES = 26`** in code; **`obj_measurement_time_ms`** per object for freshness/AoI-style use.
+- Schema supports up to **`K_max`** objects (default **32** in NED); **`maxObjectsPerSdsm`** in `omnetpp.ini` is the **packer cap** (**16** in `[General]`, **32** in **`[Config Greedy_v2]`** / **`[Config HybridSDSM_v2]`**). **`SDSM_PER_OBJECT_BYTES = 26`**; **`obj_measurement_time_ms`** per object.
 - Objects are drawn from **`neighborInfo_`** within **`detectionRange`** (default **300 m**) and **`detectionMaxAge`** (default **2 s**).
 
 ---
@@ -99,9 +220,7 @@ Includes `avg_latency` / `p95_latency` from **`simTime − BSM envelope timestam
 | `analysis/compute_aoi.py` | Kaul-style AoI from full `*-rx.csv` |
 | `analysis/compute_pdr.py` | Distance-binned PDR |
 | `analysis/compute_redundancy.py` | Object-level redundancy (v2 + object-AoI) |
-| `analysis/build_claude_batch_30mb.py` | Downsampled export ≤30 MB/file + `MANIFEST.txt` |
-
-Column semantics for external LLM/batch work: `analysis/CLAUDE_PROMPT_presentation_batches.md`.
+| `analysis/scale_by_distance.py` | Auxiliary scaling / distance analysis helper |
 
 ---
 
