@@ -38,6 +38,9 @@ packet SdsmPayload
     int offset_x[32];                       // position offset from ref_pos, 0.1 m units
     int offset_y[32];
     int offset_z[32];
+    int obj_width[32];                      // 0.1 m units
+    int obj_height[32];                     // 0.1 m units
+    int obj_length[32];                     // 0.1 m units
     int obj_speed[32];                      // 0.02 m/s units (J2735)
     int obj_heading[32];                    // 0.0125 deg units, 28800=unavailable
     uint16_t obj_measurement_time_ms[32];   // ms since simulation start when this object was measured
