@@ -218,9 +218,18 @@ Includes `avg_latency` / `p95_latency` from **`simTime − BSM envelope timestam
 | Script | Purpose |
 |--------|---------|
 | `analysis/compute_aoi.py` | Kaul-style AoI from full `*-rx.csv` |
-| `analysis/compute_pdr.py` | Distance-binned PDR |
+| `analysis/compute_pdr.py` | Distance-binned PDR (**fixed denominator**: per-second geometry, TX-rate weighted — see "PDR metric (fixed)") |
 | `analysis/compute_redundancy.py` | Object-level redundancy (v2 + object-AoI) |
 | `analysis/scale_by_distance.py` | Auxiliary scaling / distance analysis helper |
+| `analysis/compute_pdr_true.py` | Activity-weighted true-PDR distance curves (baseline diagnosis) |
+| `analysis/compute_final_truepdr.py` | Per-run scalar true PDR (Σrx / Σtx×in-range neighbours) |
+| `analysis/compute_final_summary.py` | Aggregate table for the 6-group final experiment |
+| `analysis/compute_pdr_seedvar.py` | Per-distance mean/var/std/min/max across the 20 seeds |
+| `analysis/compute_pdr_n10fine.py` | Low-density correction: 0.1 s position interpolation, PDR ≤ 1 |
+| `analysis/compute_pdr_sweep.py` | TX power / MCS sweep post-processing |
+| `analysis/compute_pdr_combo_seeds.py` | Scheduler × power combo with per-seed error bars |
+| `analysis/compute_pdr_valid.py` | Density / α / protocol validation post-processing |
+| `analysis/compute_pdr_line.py` | Static straight-line density experiment post-processing |
 
 ---
 
@@ -231,7 +240,10 @@ Includes `avg_latency` / `p95_latency` from **`simTime − BSM envelope timestam
 3. **Association** uses **greedy** one-to-one matching after Mahalanobis gating, not an optimal assignment solver.
 4. **ETSI-inspired** scheduler/suppressor — not a standards compliance claim.
 5. **`num_vehicles`** may be **< requested N**; always use metadata for fair normalization.
-6. **Single-scenario / seed** until you publish multi-seed CIs.
+6. **Multi-seed support**: `simulations/omnetpp_final.ini` provides 6 groups ×
+   20 seeds (`repeat = 20`) with statistics via `analysis/compute_pdr_seedvar.py`;
+   the canonical single-seed comparison above remains seed 0. Note that `repeat`
+   varies the fading/MAC RNG only — SUMO routes are fixed per scenario file.
 
 ---
 
@@ -258,6 +270,27 @@ ROS message alignment: [ucla-mobility/CPX-SDSM](https://github.com/ucla-mobility
 source <omnetpp-install>/setenv
 cd src && make -j$(nproc)
 ```
+
+### Windows / OMNeT++ 5.6.2 (MinGW64) build
+
+The project also builds on **OMNeT++ 5.6.2 with the bundled MinGW64 toolchain**
+(validated on Windows 11 with Veins 5.2 and SUMO 1.8.0). `src/makefrag` adds the
+two required flags (`-std=c++17`, `-lws2_32`); it is picked up automatically by
+`opp_makemake`, and is a no-op for the 6.x build:
+
+```bash
+source <omnetpp-5.6.2>/setenv
+cd src && opp_makemake -f --deep -O out -KVEINS_PROJ=<veins-5.2> -DVEINS_IMPORT \
+  -I<veins-5.2>/src -L<veins-5.2>/out/clang-release/src -lveins
+make -j8
+```
+
+Run batches with the `run_*.ps1` PowerShell runners (see the PDR investigation
+section below). They locate the toolchain via the `OMNETPP_ROOT` / `VEINS_ROOT` /
+`SUMO_ROOT` environment variables, with in-file defaults you can edit instead.
+Two Windows gotchas: run the simulation binary as a native process from
+`simulations/` (not through an MSYS shell), and make sure no stale `libveins.dll`
+sits next to the executable.
 
 ---
 
@@ -286,6 +319,73 @@ python3 run_experiments.py --algorithm HybridSDSM --sim-duration 90
 ```bash
 python3 scripts/shrink_rx_csv.py results/n400/Periodic/seed0/Periodic-r0-rx.csv --every 4 --decimals 3
 ```
+
+---
+
+## PDR investigation experiments
+
+A set of reproducible experiments investigating **why broadcast PDR is low** in
+this benchmark. Two independent loss mechanisms were identified:
+
+1. **Channel congestion** — at high density the 10 Hz Periodic baseline saturates
+   the channel (CBR ≈ 0.43 at ~400 vehicles) and MAC collisions dominate;
+   adaptive scheduling (HybridSDSM_v2) recovers most of this loss.
+2. **Link-budget wall at ~200 m** — with `config.xml` (α = 2.75, 20 dBm TX,
+   ≈ −92 dBm decode floor) the mean RSS crosses the decode floor near 200 m, so
+   PDR collapses there regardless of congestion. Raising TX power or lowering α
+   (see `config_alpha2.xml`) moves this wall outward as predicted by the
+   path-loss equation.
+
+Each experiment is a self-contained `.ini` (all `extends` the base configs in
+`simulations/omnetpp.ini`) plus a PowerShell batch runner and an analysis script:
+
+| Experiment | Config (`simulations/`) | Runner | Analysis (`analysis/`) |
+|---|---|---|---|
+| Baseline 3 strategies (399 veh, 300 s) | `omnetpp.ini` | `run_all3.ps1` | `compute_pdr_true.py` |
+| TX power / MCS sweep | `omnetpp_sweep.ini` | `run_sweep.ps1` | `compute_pdr_sweep.py` |
+| Scheduler × power combo (multi-seed) | `omnetpp_combo.ini` | `run_combo_seeds.ps1` | `compute_pdr_combo_seeds.py` |
+| Density / α / protocol validation | `omnetpp_valid.ini` | `run_valid.ps1` | `compute_pdr_valid.py` |
+| α × density 2×2 grid | `omnetpp_grid.ini` | `run_grid.ps1` | `compute_pdr_valid.py` |
+| Static straight-line density (idealized) | `omnetpp_line.ini` | `run_line.ps1`, `run_line2.ps1` | `compute_pdr_line.py` |
+| **Final summary: 6 groups × 20 seeds** (10/150/400 veh × Periodic/Hybrid, α = 2.0) | `omnetpp_final.ini` | `run_final.ps1` | `compute_pdr_seedvar.py`, `compute_final_truepdr.py`, `compute_final_summary.py`, `compute_pdr_n10fine.py` |
+
+Multi-seed runs use OMNeT++'s `repeat = 20` (`seed-set = ${runnumber}`), so a
+single config covers seeds 0–19:
+
+```bash
+cd simulations
+../src/veins_ros_v2v_ucla -u Cmdenv -c per_n400 -r 0..19 -f omnetpp_final.ini
+```
+
+Notes:
+
+- The extra `.ini` files set `*.manager.commandLine` to plain `sumo`; either keep
+  SUMO's `bin/` on `PATH` or edit the line, exactly as with the base
+  `omnetpp.ini`.
+- Fast-departure route sets `sumo/routes_d{10,150,400}.rou.xml` insert all
+  vehicles within 0–20 s. The stock `routes.rou.xml` spreads departures over
+  ~160 s, so short high-density runs silently plateau at ~150 vehicles — use the
+  `scenario_d*.sumo.cfg` scenarios for density studies.
+- `sumo/line/` holds the idealized scenario (2 km straight road, stationary
+  equally-spaced vehicles, 8 density levels) used to separate sampling noise at
+  low vehicle counts from real protocol effects.
+
+### PDR metric (fixed)
+
+`analysis/compute_pdr.py` previously undercounted the opportunity denominator
+(raw-float timestamp grouping fragmented the geometry, and each neighbour pair
+counted one opportunity per second regardless of the actual send rate), which
+could inflate PDR past 1. It now aggregates geometry per rounded second and
+weights each sender's neighbour counts by `tx_count_since_last`, giving a true
+PDR in [0, 1]:
+
+```
+PDR(bin) = received(bin) / Σ_seconds Σ_senders tx_that_second × receivers_in_bin
+```
+
+`compute_pdr_seedvar.py` (per-distance mean/variance across seeds) and
+`compute_pdr_n10fine.py` (0.1 s position interpolation for sparse, fast-moving
+fleets) implement the same definition for the multi-seed studies.
 
 ---
 
