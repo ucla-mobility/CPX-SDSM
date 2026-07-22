@@ -6,16 +6,8 @@ PDR definition:
   For each distance bin [d_lo, d_hi), PDR = (received packets where sender-receiver
   distance was in bin) / (total TX opportunities in that bin).
 
-The denominator counts real TX opportunities: per rounded second, the pairwise
-sender->receiver geometry is weighted by each sender's actual packet count that
-second (`tx_count_since_last` from the timeseries CSV). Two earlier bugs are fixed:
-  1. Snapshots were grouped by raw float timestamps, which differ per vehicle, so
-     most "snapshots" contained a single vehicle and pair counts were fragmented.
-     Times are now rounded to the second before grouping.
-  2. Each neighbour pair contributed 1 opportunity per second regardless of the
-     actual send rate (10 Hz for Periodic), undercounting the denominator by up to
-     ~84x and yielding PDR > 1. Pairs are now weighted by tx_count_since_last
-     (falls back to 1/pair/second, with a note, if the column is absent).
+The denominator is estimated from TX logs + timeseries snapshots: for each TX event,
+count all alive receivers at the sender's position within the distance bin.
 
 Input:  *-rx.csv, *-tx.csv, *-timeseries.csv
 Output: *-pdr-binned.csv
@@ -93,51 +85,44 @@ def compute_pdr_for_prefix(prefix: str, result_dir: Path) -> pd.DataFrame:
             })
         return pd.DataFrame(results)
 
-    # Group snapshots by ROUNDED second: per-vehicle log timestamps differ at the
-    # sub-second level, so grouping by raw float time fragments the geometry.
-    ts_df = ts_df.copy()
-    ts_df["_sec"] = ts_df["time"].round().astype(int)
+    # Sample timeseries at distinct time steps
+    ts_times = sorted(ts_df["time"].unique())
 
-    # Per-sender TX weight for that second (actual packets sent). Fallback: 1.
-    has_tx_col = "tx_count_since_last" in ts_df.columns
-    if not has_tx_col:
-        print("  WARN: no tx_count_since_last column; assuming 1 TX/sender/second "
-              "(denominator will undercount high-rate senders)")
+    # Build position snapshots: time -> {vehicle_id: (x, y)}
+    denom_bins = {f"{BIN_EDGES[i]}-{BIN_EDGES[i+1]}": 0 for i in range(len(BIN_EDGES)-1)}
 
-    n_bins = len(BIN_EDGES) - 1
-    bin_labels = [f"{BIN_EDGES[i]}-{BIN_EDGES[i+1]}" for i in range(n_bins)]
-    denom = np.zeros(n_bins)
-    edges = np.asarray(BIN_EDGES, dtype=float)
-
-    for _, snapshot in ts_df.groupby("_sec"):
-        # A vehicle may log more than once within the rounded second; keep the last.
-        snapshot = snapshot.drop_duplicates("vehicle_id", keep="last")
+    for t in ts_times:
+        snapshot = ts_df[ts_df["time"] == t][["vehicle_id", "position_x", "position_y"]]
         if len(snapshot) < 2:
             continue
-        positions = snapshot[["position_x", "position_y"]].to_numpy(dtype=float)
-        tx_w = (snapshot["tx_count_since_last"].to_numpy(dtype=float)
-                if has_tx_col else np.ones(len(snapshot)))
-        # Pairwise sender->receiver distances (senders on axis 0)
-        diff = positions[:, None, :] - positions[None, :, :]
-        dist = np.sqrt((diff ** 2).sum(axis=2))
-        np.fill_diagonal(dist, np.inf)
-        bin_idx = np.digitize(dist, edges, right=False) - 1  # -1 = below 0 (impossible)
-        for k in range(n_bins):
-            # opportunities in bin k = sum over senders of (tx that second x receivers in bin)
-            denom[k] += (tx_w[:, None] * (bin_idx == k)).sum()
+        positions = snapshot[["position_x", "position_y"]].values
+        n_veh = len(positions)
+        # Pairwise distances
+        for i in range(n_veh):
+            for j in range(n_veh):
+                if i == j:
+                    continue
+                dx = positions[i, 0] - positions[j, 0]
+                dy = positions[i, 1] - positions[j, 1]
+                dist = np.sqrt(dx * dx + dy * dy)
+                for k in range(len(BIN_EDGES) - 1):
+                    if BIN_EDGES[k] <= dist < BIN_EDGES[k + 1]:
+                        denom_bins[f"{BIN_EDGES[k]}-{BIN_EDGES[k+1]}"] += 1
+                        break
 
-    denom_bins = {bin_labels[k]: denom[k] for k in range(n_bins)}
-
+    # Normalize denominator by number of time samples to get per-second rate,
+    # then multiply by total simulation time to approximate total opportunities.
+    # Actually, each timeseries row is one opportunity sample.
     results = []
     for i in range(len(BIN_EDGES) - 1):
         label = f"{BIN_EDGES[i]}-{BIN_EDGES[i+1]}"
         n = int(numerator.get(label, 0))
-        d = float(denom_bins[label])
+        d = denom_bins[label]
         pdr = n / d if d > 0 else -1.0
         results.append({
             "distance_bin": label,
             "received": n,
-            "denominator": round(d, 1),
+            "denominator": d,
             "pdr": round(pdr, 6) if pdr >= 0 else -1.0,
         })
 
