@@ -54,8 +54,4 @@ ros2_ws/log/
 
 # Logs
 *.log
-log/
-
-# Local report artifacts (slides, figures)
-*.pptx
 
