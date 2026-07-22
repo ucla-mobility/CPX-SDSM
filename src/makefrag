@@ -1,0 +1,7 @@
+# Build this project with C++17 (upstream CPX-SDSM targets OMNeT++ 6 / C++17).
+# OMNeT++ 5.6.2 defaults to -std=c++11; appended here so the later flag wins.
+CXXFLAGS += -std=c++17
+
+# ROS UDP bridge uses Winsock2 (socket/htons/WSAStartup/...). Link the Windows
+# Sockets library; placed after the object files so symbols resolve.
+LIBS += -lws2_32
