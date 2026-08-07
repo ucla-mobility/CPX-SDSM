@@ -1,0 +1,12 @@
+clients/
+logs/
+run/
+bags/*.bag
+bags/**/*.bag
+catkin_ws/build*/
+catkin_ws/devel*/
+catkin_ws/install*/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/

@@ -1,0 +1,219 @@
+Verizon Demo Test Steps
+Topology: Infrastructure Vehicle client -> Verizon BSM -> Windows Software relay
+          -> Verizon Private TIM -> Vehicle Vehicle client (and reverse)
+
+IMPORTANT
+- The two Ubuntu endpoints must use two different Vehicle registrations.
+- Start the Windows relay before either Ubuntu endpoint.
+- Verizon Session IDs change after reconnect; the relay learns them automatically.
+- Do not copy one Vehicle registration to both Ubuntu devices.
+
+0. Register the second Vehicle client (Windows PC, one time only)
+
+Open PowerShell:
+
+cd "D:\sim\Verizon_Demo"
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\windows\register_infrastructure_vehicle.ps1 `
+  -MasterConfig "D:\path\to\config.UclaEvalDevice.json"
+
+Expected:
+NEW_INFRASTRUCTURE_VEHICLE_REGISTERED
+Identity: Vehicle/PassengerCar/UclaEvalDevice
+
+The new protected artifact is:
+D:\sim\Verizon_Demo\clients\infrastructure_vehicle\registration.json
+
+Do not run registration again when this file already exists and is valid.
+
+1. Copy the complete updated project
+
+Infrastructure destination:
+/home/mobility/ros_ws/Verizon_Demo
+
+Vehicle destination:
+/home/dev/ros_ws/Verizon_Demo
+
+The Windows copy remains:
+D:\sim\Verizon_Demo
+
+Required registrations:
+- Infrastructure: clients/infrastructure_vehicle/registration.json
+- Vehicle: clients/vehicle/registration.json
+- Windows relay: clients/infrastructure_gateway/registration.json
+
+2. One-time setup
+
+Windows PowerShell:
+
+cd "D:\sim\Verizon_Demo"
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\windows\setup_monitor.ps1
+
+Expected: WINDOWS_MONITOR_SETUP_OK
+
+Infrastructure terminal:
+
+cd /home/mobility/ros_ws/Verizon_Demo
+bash scripts/setup_ubuntu18.sh infrastructure
+bash scripts/preflight.sh infrastructure
+
+Expected:
+REGISTRATION_IDENTITY=Vehicle/PassengerCar/UclaEvalDevice
+SENDER_ID=ucla-infrastructure-nw
+PREFLIGHT_OK
+
+Vehicle terminal:
+
+cd /home/dev/ros_ws/Verizon_Demo
+bash scripts/setup_ubuntu18.sh vehicle
+bash scripts/preflight.sh vehicle
+
+Expected:
+REGISTRATION_IDENTITY=Vehicle/PassengerCar/UclaEvalDevice
+SENDER_ID=ucla-vehicle-01
+PREFLIGHT_OK
+
+3. Time check (both Ubuntu devices)
+
+timedatectl status
+sudo timedatectl set-ntp true
+timedatectl status
+
+Check that both clocks are synchronized before measuring latency.
+
+4. Start the original live ROS applications
+
+Start the original Infrastructure detection/tracking project.
+Start the original Vehicle detection/tracking project.
+
+Infrastructure check:
+
+cd /home/mobility/ros_ws/Verizon_Demo
+bash scripts/verify_live_topic.sh infrastructure 20
+
+Vehicle check:
+
+cd /home/dev/ros_ws/Verizon_Demo
+bash scripts/verify_live_topic.sh vehicle 20
+
+Live source topics:
+- Infrastructure: /tracking2/tracking_objects
+- Infrastructure attached MarkerArray: /tracking2/transformed_det_box_score_label
+- Vehicle: /tracking/tracking_objects
+
+Infrastructure verification must additionally print:
+MARKER_TYPE_AND_MD5_OK
+MARKER_LIVE_MESSAGE_OK
+
+5. Start the Windows Software relay FIRST
+
+Windows PowerShell (keep this window open):
+
+cd "D:\sim\Verizon_Demo"
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\windows\run_monitor.ps1
+
+Expected: SOFTWARE_RELAY_READY
+
+The relay initially reports sessions=0/2; this is normal.
+
+6. Start both Ubuntu endpoints
+
+Infrastructure:
+
+cd /home/mobility/ros_ws/Verizon_Demo
+bash scripts/start_node.sh infrastructure
+
+Vehicle:
+
+cd /home/dev/ros_ws/Verizon_Demo
+bash scripts/start_node.sh vehicle
+
+Expected on each: NODE_READY
+
+Each endpoint sends a control BSM every 5 seconds so the Windows relay can
+learn its current Session ID even before the first detection frame.
+
+7. Verify the Windows relay
+
+Open a second Windows PowerShell:
+
+cd "D:\sim\Verizon_Demo"
+.\windows\status_monitor.ps1
+
+Required:
+INFRA_SESSION_LEARNED=True
+VEHICLE_SESSION_LEARNED=True
+BSM_DATA_RX increases
+TIM_PUBLISHED increases
+INFRA_TO_VEHICLE increases
+VEHICLE_TO_INFRA increases
+TIM_FAILED=0
+
+8. Verify received ROS1 messages
+
+Infrastructure:
+
+source /home/mobility/ros_ws/Verizon_Demo/scripts/load_role.sh infrastructure
+rostopic hz /etx/from_vehicle/tracking_objects
+rostopic echo -n 1 /etx/from_vehicle/tracking_objects
+
+Vehicle:
+
+source /home/dev/ros_ws/Verizon_Demo/scripts/load_role.sh vehicle
+rostopic hz /etx/from_infrastructure/tracking_objects
+rostopic echo -n 1 /etx/from_infrastructure/tracking_objects
+rostopic type /tracking/transformed_det_box_score_label
+rostopic hz /tracking/transformed_det_box_score_label
+rostopic echo -n 1 /tracking/transformed_det_box_score_label
+
+Required MarkerArray result on Vehicle:
+- type: visualization_msgs/MarkerArray
+- the topic rate increases while Infrastructure tracking is live
+- marker entries contain namespace/class, text/score, pose and scale
+
+Endpoint counters:
+
+cd /home/mobility/ros_ws/Verizon_Demo
+bash scripts/status_node.sh infrastructure
+
+cd /home/dev/ros_ws/Verizon_Demo
+bash scripts/status_node.sh vehicle
+
+Required:
+BSM_TX increases
+TIM_RX_UNIQUE increases
+TO_ROS increases
+TIM_RX_WRONG_TARGET=0
+
+Infrastructure status must report:
+MARKER_ATTACHED=true
+MARKER_SOURCE_TOPIC=/tracking2/transformed_det_box_score_label
+
+9. Stop
+
+Stop the Windows foreground relay with Ctrl+C.
+
+Infrastructure:
+bash /home/mobility/ros_ws/Verizon_Demo/scripts/stop_node.sh infrastructure
+
+Vehicle:
+bash /home/dev/ros_ws/Verizon_Demo/scripts/stop_node.sh vehicle
+
+10. Evidence
+
+Windows:
+D:\sim\Verizon_Demo\logs\pc_monitor_<UTC>\bsm_rx.jsonl
+D:\sim\Verizon_Demo\logs\pc_monitor_<UTC>\tim_tx.jsonl
+D:\sim\Verizon_Demo\logs\pc_monitor_<UTC>\status.json
+
+Infrastructure:
+/home/mobility/ros_ws/Verizon_Demo/logs/infrastructure_<UTC>/
+
+Vehicle:
+/home/dev/ros_ws/Verizon_Demo/logs/vehicle_<UTC>/
+
+Final delivery/PDR evidence is the destination received.jsonl, not merely a
+successful publish return at the relay. The Software relay hop is part of the
+end-to-end path and increases measured latency.

@@ -1,0 +1,39 @@
+[project]
+name = "examples"
+version = "0.3.0"
+description = "Reference implementations and sample code for Verizon ETX"
+license = "Apache-2.0"
+readme = "README.md"
+authors = [
+    { name = "Sean Hsu", email = "yu.hsiang.sean.hsu@verizon.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "j2735codec",
+    "paho-mqtt>=2.1.0",
+    "python-geohash>=0.8.5",
+    "requests>=2.32.5",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.11",
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = "src"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+package = true
