@@ -298,6 +298,48 @@ ros2 run veins_ros_bridge udp_bridge_node --ros-args -p udp_port:=50010
 
 Enable with `rosBridgeMode = "live"` in `omnetpp.ini` when needed.
 
+`udp_bridge_node` decodes each TX/RX JSON line RosSDSMApp emits into a
+structured `sdsm_trust_interfaces/ReceivedSdsm` and publishes it on
+`/veins/sdsm_events` (the raw text still goes to `/veins/rx_raw` too).
+
+### SDSM trust layer (optional second-layer check)
+
+`sdsm_trust_perception` is an independent per-vehicle trust judge — reputation,
+kinematic-plausibility and size-agreement checks, peer corroboration, a
+deferred grace ledger for objects only one sender reports — ported from
+[CPX-Mono](../CPX-Mono)'s `global_trust_perception` cooperative-perception
+trust pipeline and adapted to this repo's `SensorDataSharingMessage` wire
+format. It runs one `TrustEngine` per simulated vehicle that shows up as an
+RX receiver in the bridged event stream, so each vehicle's verdicts reflect
+only what it actually received after the 802.11p channel model — not a
+global oracle view.
+
+This wire format carries no per-object local-certainty field, so unlike
+CPX-Mono's two-layer design (local sensor confidence + cross-agent judgment),
+this port's trust judgment rests entirely on the second layer: whether a
+reported object is kinematically plausible given its prior track, whether its
+reported size agrees with what the judging vehicle itself sees, and whether
+peers corroborate it. See `sdsm_trust_perception/pipeline/sdsm_codec.py`'s
+module docstring for the full list of what this sim's wire format can and
+cannot supply, and `pipeline/trustworthy_perception.py`'s docstring for what
+was and wasn't ported from CPX-Mono (notably: matching a judge's own report
+to a sender's is done by the reported `object_id`, which this sim already
+uses as a stable per-vehicle identity, rather than by CPX-Mono's spatial WBF
+clustering, which wasn't ported).
+
+```bash
+cd ros2_ws && colcon build && source install/setup.bash
+pip install filterpy   # no rosdep key; SORT tracking + sender-speed Kalman filters need it
+ros2 launch sdsm_trust_perception sdsm_trust.launch.py
+```
+
+Per-vehicle reputation history persists to SQLite under
+`ros2_ws/data/sdsm_trust_perception/historical_reputations_<node>.db`.
+Verdicts publish on `/veins/trust_verdicts`
+(`sdsm_trust_interfaces/TrustVerdict`) — one message per (judging vehicle,
+judged sender) per flush, `trusted=false` senders included (diagnostic
+channel: nothing should act on perception a judge withheld).
+
 ---
 
 ## License

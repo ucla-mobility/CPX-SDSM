@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>sdsm_trust_perception</name>
+  <version>0.1.0</version>
+  <description>
+    Second-layer trust check on SDSM traffic: an independent per-node
+    TrustEngine (reputation, kinematic-plausibility and size-agreement
+    checks, corroboration, a deferred grace ledger) that judges what each
+    simulated vehicle actually received, on top of the 802.11p channel model.
+    Ported from CPX-Mono's ros2/src/global_trust_perception,
+    ros2/src/global_trust_tracker, and ros2/src/local_trust_estimation's
+    trust-calculation core — see that repo for the full design writeup.
+    Adapted for CPX-SDSM's SensorDataSharingMessage wire format via
+    pipeline/sdsm_codec.py (see its module docstring for what this sim's
+    wire format can and cannot supply, notably: no per-object local
+    certainty, so this port's judgment rests entirely on the second-layer
+    checks rather than on a sender's own claimed confidence).
+  </description>
+  <maintainer email="lab@example.edu">Lab Maintainer</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>sdsm_msgs</depend>
+  <depend>sdsm_trust_interfaces</depend>
+
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>veins_ros_bridge</exec_depend>
+
+  <!-- filterpy has no rosdep key; install via pip (see README): pip install filterpy -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

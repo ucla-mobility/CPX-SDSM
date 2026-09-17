@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>sdsm_trust_interfaces</name>
+  <version>0.1.0</version>
+  <description>
+    Message definitions for the SDSM trust layer: the envelope that carries one
+    veins_ros_bridge TX/RX event (sdsm_msgs/SensorDataSharingMessage plus which
+    simulated node sent or received it) and the per-sender verdict a
+    sdsm_trust_perception TrustEngine produces from judging it. Ported from
+    CPX-Mono's global_trust_perception second-layer trust pipeline
+    (ros2/src/sdsm_interfaces, ros2/src/global_trust_perception) — see that
+    repo for the full design writeup.
+  </description>
+  <maintainer email="lab@example.edu">Lab Maintainer</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <depend>sdsm_msgs</depend>
+
+  <exec_depend>rosidl_default_runtime</exec_depend>
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

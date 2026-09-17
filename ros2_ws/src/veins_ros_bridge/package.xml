@@ -12,6 +12,7 @@
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <depend>sdsm_msgs</depend>
+  <depend>sdsm_trust_interfaces</depend>
 
   <export>
     <build_type>ament_python</build_type>
