@@ -24,97 +24,16 @@ import threading
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from sdsm_msgs.msg import (
-    DDateTime,
-    DetectedObjectCommonData,
-    DetectedObjectData,
-    DetectedObstacleData,
-    DetectedVehicleData,
-    DetectedVRUData,
-    ObstacleSize,
-    Position3D,
-    PositionConfidenceSet,
-    PositionOffsetXYZ,
-    SensorDataSharingMessage,
-    VehicleSize,
-)
+from sdsm_msgs.msg import SensorDataSharingMessage
 from sdsm_trust_interfaces.msg import ReceivedSdsm
+from sdsm_trust_perception.pipeline import sdsm_codec as codec
 
-
-def _decode_sdsm(d: dict) -> SensorDataSharingMessage:
-    """Build a SensorDataSharingMessage from buildSdsmJson's dict shape.
-    Field names below match that function 1:1 (RosSDSMApp.cc) -- see it for
-    the authoritative wire shape."""
-    msg = SensorDataSharingMessage()
-    msg.msg_cnt = int(d['msg_cnt'])
-    msg.source_id = [int(b) & 0xFF for b in d['source_id']]
-    msg.equipment_type = int(d['equipment_type'])
-
-    ts = d['sdsm_time_stamp']
-    msg.sdsm_time_stamp = DDateTime(
-        day_of_month=int(ts['day_of_month']), time_of_day=int(ts['time_of_day']),
-    )
-
-    rp = d['ref_pos']
-    msg.ref_pos = Position3D(
-        lat=int(rp['lat']), lon=int(rp['lon']), elevation=int(rp['elevation']),
-    )
-
-    objects = []
-    for o in d.get('objects', []):
-        common = o['det_obj_common']
-        pos = common['pos']
-        conf = common['pos_confidence']
-        det_common = DetectedObjectCommonData(
-            obj_type=int(common['obj_type']),
-            obj_type_cfd=int(common['obj_type_cfd']),
-            object_id=int(common['object_id']) & 0xFFFF,
-            measurement_time=int(common['measurement_time']),
-            pos=PositionOffsetXYZ(
-                offset_x=int(pos['offset_x']), offset_y=int(pos['offset_y']),
-                offset_z=int(pos['offset_z']), has_offset_z=bool(pos['has_offset_z']),
-            ),
-            pos_confidence=PositionConfidenceSet(
-                pos_confidence=int(conf['pos_confidence']),
-                elevation_confidence=int(conf['elevation_confidence']),
-            ),
-            speed=int(common['speed']) & 0xFFFF,
-            speed_z=int(common['speed_z']) & 0xFFFF,
-            has_speed_z=bool(common['has_speed_z']),
-            heading=int(common['heading']) & 0xFFFF,
-        )
-
-        veh = o['det_veh']
-        vsize = veh['size']
-        det_veh = DetectedVehicleData(
-            size=VehicleSize(width=int(vsize['width']) & 0xFFFF,
-                             length=int(vsize['length']) & 0xFFFF),
-            has_size=bool(veh['has_size']),
-            height=int(veh['height']) & 0xFFFF,
-            has_height=bool(veh['has_height']),
-            vehicle_class=int(veh['vehicle_class']) & 0xFF,
-            has_vehicle_class=bool(veh['has_vehicle_class']),
-            class_conf=int(veh['class_conf']) & 0xFF,
-            has_class_conf=bool(veh['has_class_conf']),
-        )
-
-        vru = o['det_vru']
-        det_vru = DetectedVRUData(basic_type=int(vru['basic_type']) & 0xFF)
-
-        obst = o['det_obst']['obst_size']
-        det_obst = DetectedObstacleData(
-            obst_size=ObstacleSize(width=int(obst['width']) & 0xFFFF,
-                                   length=int(obst['length']) & 0xFFFF,
-                                   height=int(obst['height']) & 0xFFFF),
-        )
-
-        objects.append(DetectedObjectData(
-            det_obj_common=det_common,
-            det_obj_opt_kind=int(o['det_obj_opt_kind']) & 0xFF,
-            det_veh=det_veh, det_vru=det_vru, det_obst=det_obst,
-        ))
-    msg.objects = objects
-    return msg
+# Decoding a buildSdsmJson() dict into a SensorDataSharingMessage lives in
+# sdsm_trust_perception.pipeline.sdsm_codec (codec.sdsm_from_dict) -- the same
+# function an offline replay of a rosBridgeMode="log" .jsonl file uses, since
+# RosSDSMApp.cc emits byte-identical JSON on both paths. Kept in that package
+# (not here) because that's where the rest of this wire format's field-level
+# knowledge already lives; this module only owns UDP transport.
 
 
 class UdpBridgeNode(Node):
@@ -171,7 +90,7 @@ class UdpBridgeNode(Node):
             out.is_rx = (event == 'RX')
             out.node = int(d['node'])
             out.sim_time = float(d['time'])
-            out.sdsm = _decode_sdsm(d['sdsm'])
+            out.sdsm = codec.sdsm_from_dict(d['sdsm'])
             if out.is_rx:
                 out.latency = float(d.get('latency', 0.0))
                 out.sender_node = int(d.get('sender', out.sdsm.source_id[0]))

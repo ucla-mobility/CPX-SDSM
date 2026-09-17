@@ -48,7 +48,20 @@ fields with the same names, so the two are the same shape):
 import math
 from typing import Optional
 
-from sdsm_msgs.msg import SensorDataSharingMessage
+from sdsm_msgs.msg import (
+    DDateTime,
+    DetectedObjectCommonData,
+    DetectedObjectData,
+    DetectedObstacleData,
+    DetectedVehicleData,
+    DetectedVRUData,
+    ObstacleSize,
+    Position3D,
+    PositionConfidenceSet,
+    PositionOffsetXYZ,
+    SensorDataSharingMessage,
+    VehicleSize,
+)
 from sdsm_trust_interfaces.msg import ReceivedSdsm
 
 # --- Public, format-agnostic handle ------------------------------------------
@@ -256,6 +269,87 @@ def capture_lag_of(_msg: Message) -> float:
     starts populating it would need this function to decide how to treat a
     negative value; deferred until real data exists to decide it against."""
     return 0.0
+
+
+def sdsm_from_dict(d: dict) -> SensorDataSharingMessage:
+    """Build a SensorDataSharingMessage from RosSDSMApp::buildSdsmJson's dict
+    shape -- the wire format both veins_ros_bridge's live UDP path and any
+    offline replay of a rosBridgeMode="log" .jsonl file share (RosSDSMApp.cc
+    emits byte-identical JSON either way; only the transport differs). Field
+    names below match that function 1:1; see it for the authoritative shape.
+
+    Moved here (was udp_bridge_node._decode_sdsm) so both the live bridge and
+    an offline log replay import one decoder instead of drifting copies."""
+    msg = SensorDataSharingMessage()
+    msg.msg_cnt = int(d['msg_cnt'])
+    msg.source_id = [int(b) & 0xFF for b in d['source_id']]
+    msg.equipment_type = int(d['equipment_type'])
+
+    ts = d['sdsm_time_stamp']
+    msg.sdsm_time_stamp = DDateTime(
+        day_of_month=int(ts['day_of_month']), time_of_day=int(ts['time_of_day']),
+    )
+
+    rp = d['ref_pos']
+    msg.ref_pos = Position3D(
+        lat=int(rp['lat']), lon=int(rp['lon']), elevation=int(rp['elevation']),
+    )
+
+    objects = []
+    for o in d.get('objects', []):
+        common = o['det_obj_common']
+        pos = common['pos']
+        conf = common['pos_confidence']
+        det_common = DetectedObjectCommonData(
+            obj_type=int(common['obj_type']),
+            obj_type_cfd=int(common['obj_type_cfd']),
+            object_id=int(common['object_id']) & 0xFFFF,
+            measurement_time=int(common['measurement_time']),
+            pos=PositionOffsetXYZ(
+                offset_x=int(pos['offset_x']), offset_y=int(pos['offset_y']),
+                offset_z=int(pos['offset_z']), has_offset_z=bool(pos['has_offset_z']),
+            ),
+            pos_confidence=PositionConfidenceSet(
+                pos_confidence=int(conf['pos_confidence']),
+                elevation_confidence=int(conf['elevation_confidence']),
+            ),
+            speed=int(common['speed']) & 0xFFFF,
+            speed_z=int(common['speed_z']) & 0xFFFF,
+            has_speed_z=bool(common['has_speed_z']),
+            heading=int(common['heading']) & 0xFFFF,
+        )
+
+        veh = o['det_veh']
+        vsize = veh['size']
+        det_veh = DetectedVehicleData(
+            size=VehicleSize(width=int(vsize['width']) & 0xFFFF,
+                             length=int(vsize['length']) & 0xFFFF),
+            has_size=bool(veh['has_size']),
+            height=int(veh['height']) & 0xFFFF,
+            has_height=bool(veh['has_height']),
+            vehicle_class=int(veh['vehicle_class']) & 0xFF,
+            has_vehicle_class=bool(veh['has_vehicle_class']),
+            class_conf=int(veh['class_conf']) & 0xFF,
+            has_class_conf=bool(veh['has_class_conf']),
+        )
+
+        vru = o['det_vru']
+        det_vru = DetectedVRUData(basic_type=int(vru['basic_type']) & 0xFF)
+
+        obst = o['det_obst']['obst_size']
+        det_obst = DetectedObstacleData(
+            obst_size=ObstacleSize(width=int(obst['width']) & 0xFFFF,
+                                   length=int(obst['length']) & 0xFFFF,
+                                   height=int(obst['height']) & 0xFFFF),
+        )
+
+        objects.append(DetectedObjectData(
+            det_obj_common=det_common,
+            det_obj_opt_kind=int(o['det_obj_opt_kind']) & 0xFF,
+            det_veh=det_veh, det_vru=det_vru, det_obst=det_obst,
+        ))
+    msg.objects = objects
+    return msg
 
 
 def envelope_receiver(event: ReceivedSdsm) -> int:
