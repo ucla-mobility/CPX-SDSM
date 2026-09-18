@@ -9,7 +9,7 @@ the same .lat/.lon attributes local_xy_of actually reads).
 import math
 from types import SimpleNamespace
 
-from sdsm_trust_perception.pipeline import sdsm_codec as codec
+from sdsm_trust_perception.global_trust_perception.pipeline import sdsm_codec as codec
 
 
 def _forward_project(x_m: float, y_m: float) -> SimpleNamespace:

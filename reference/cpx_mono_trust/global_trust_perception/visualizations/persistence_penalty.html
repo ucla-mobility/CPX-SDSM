@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Persistence Penalty</title>
+<link rel="stylesheet" href="viz.css">
+<script src="viz.js"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0; padding:2rem 1.25rem; background:var(--bg); color:var(--text-primary);
+    font-family:Cambria, Georgia, "Times New Roman", serif; line-height:1.6;}
+  .wrap{max-width:693px; margin:0 auto;}
+  h1{font-size:22px; font-weight:500; margin:0 0 1.25rem;}
+  button.scn{flex:1; min-width:130px; padding:9px 12px; font-size:14px; font-family:inherit;
+    background:transparent; color:var(--text-primary); border:1px solid var(--border-strong);
+    border-radius:var(--radius); cursor:pointer;}
+  button.scn:hover{background:var(--surface-1);}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:2px;
+    background:var(--border-strong); outline:none;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none; width:18px; height:18px;
+    border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  input[type=range]::-moz-range-thumb{width:18px; height:18px; border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  .legend{display:flex; gap:16px; margin-bottom:.75rem; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);}
+  .legend span{display:flex; align-items:center; gap:6px;}
+  .stat{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem;}
+  .stat .lbl{font-size:13px; color:var(--text-secondary);}
+  .stat .val{font-size:22px; font-weight:500;}
+  .doc{margin-top:2.5rem; border-top:1px solid var(--border); padding-top:1.5rem;}
+  .doc h2{font-size:18px; font-weight:600; margin:0 0 1rem;}
+  .doc h3{font-size:15px; font-weight:600; margin:1.75rem 0 .5rem;}
+  .doc p{font-size:14px; color:var(--text-secondary); margin:.4rem 0;}
+  .doc .eq{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem; margin:.5rem 0; overflow-x:auto;}
+  .doc table{width:100%; border-collapse:collapse; font-size:13px; margin-top:.5rem;}
+  .doc th,.doc td{text-align:left; padding:.5rem .6rem; border-bottom:1px solid var(--border); vertical-align:top;}
+  .doc th{color:var(--text-secondary); font-weight:600;}
+  .doc td:first-child{white-space:nowrap;}
+  .doc td:nth-child(2){color:var(--text-primary); font-weight:500; white-space:nowrap;}
+  .doc td:nth-child(3){color:var(--text-secondary);}
+</style>
+<script>
+  window.MathJax = { tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] } };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js" async></script>
+</head>
+<body>
+<div class="wrap">
+<h1>Persistence Penalty</h1>
+
+<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:1rem;" id="scenarios">
+  <button data-s="steady" class="scn">Steady, good</button>
+  <button data-s="onoff" class="scn">On-off attack</button>
+  <button data-s="onoff2" class="scn">On-off (escalating)</button>
+  <button data-s="decline" class="scn">Slow decline</button>
+  <button data-s="sharp" class="scn">Single sharp drop</button>
+  <button data-s="twohit" class="scn">Two severe drops</button>
+</div>
+
+<div class="legend">
+  <span><span style="width:16px; height:0; border-top:2px dashed var(--text-muted);"></span>input R (0-100)</span>
+  <span><span style="width:16px; height:3px; background:var(--amber); display:inline-block;"></span>weight V</span>
+  <span><span style="width:16px; height:3px; background:var(--blue); display:inline-block;"></span>final R = R&middot;V</span>
+</div>
+
+<div class="chart-box" style="position:relative; height:360px; margin-bottom:.5rem;"><canvas id="chart" style="width:100%; height:100%;"></canvas></div>
+
+<div style="display:flex; gap:16px; align-items:center; margin-bottom:1rem;">
+  <div style="position:relative; width:150px; height:80px; flex-shrink:0;"><canvas id="sigchart" style="width:100%; height:100%;"></canvas></div>
+  <div style="font-size:12px; color:var(--text-secondary); line-height:1.5;">signed change &divide; D_range &rarr; weight.<br>gains (left of 0) clip to zero;<br>drops ramp linearly, cap at 1.</div>
+</div>
+
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:1.25rem;">
+  <div class="stat"><div class="lbl">min V (worst hit)</div><div class="val" id="stat-min">&mdash;</div></div>
+  <div class="stat"><div class="lbl">end V (rebound)</div><div class="val" id="stat-end">&mdash;</div></div>
+  <div class="stat"><div class="lbl">persist &divide; single S<sub>L</sub></div><div class="val" id="stat-sl">&mdash;</div></div>
+  <div class="stat"><div class="lbl">half-life m<sub>1/2</sub> (steps)</div><div class="val" id="stat-hl">&mdash;</div></div>
+  <div class="stat"><div class="lbl">derived &beta;<sub>L</sub></div><div class="val" id="stat-bl">&mdash;</div></div>
+  <div class="stat"><div class="lbl">N<sub>eff</sub> (frames)</div><div class="val" id="stat-neff">&mdash;</div></div>
+</div>
+
+<div id="controls" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px 20px;"></div>
+
+<section class="doc">
+  <h2>The equations</h2>
+
+  <p><strong>1. Signed step change</strong> — how much reputation moved since last step (positive = it fell, negative = it rose):</p>
+  <div class="eq">\[ d_t = R_{t-1} - R_t \]</div>
+
+  <p><strong>2. Normalized drop</strong> — clip to \([0,1]\), so gains become zero and only falls count; the dead-zone \(\epsilon\) additionally ignores any drop smaller than \(\epsilon\,D_{\text{range}}\):</p>
+  <div class="eq">\[ \tilde d_t = \operatorname{clip}\!\left(\frac{d_t}{D_{\text{range}}} - \epsilon,\ 0,\ 1\right) \]</div>
+
+  <p><strong>3. Persistence channel</strong> — a normalized leaky EMA (bounded in \([0,1]\)) that rises under sustained drops and bleeds off when they stop:</p>
+  <div class="eq">\[ \text{risk}^L_t = \beta_L\,\text{risk}^L_{t-1} + (1-\beta_L)\,\tilde d_t^{\,\alpha} \]</div>
+
+  <p><strong>3a. Memory is set in real time, not as a raw \(\beta_L\).</strong> Pick a half-life \(T_{1/2}\); at \(f\) frames/sec that is \(N_{1/2}=f\,T_{1/2}\) frames, and \(\beta_L\) is derived so the accumulator halves over exactly that span:</p>
+  <div class="eq">\[ \beta_L = 2^{-1/N_{1/2}}, \qquad N_{1/2} = f\cdot T_{1/2} \]</div>
+  <p>The soft memory span (not a hard window) is \(N_{\text{eff}} = \tfrac{1}{1-\beta_L} \approx 1.44\,N_{1/2}\). This explorer fixes \(f=25\) fps and lets \(T_{1/2}\) run from a few frames up to <strong>1 hour</strong> (90&thinsp;000 frames) — a range a raw \(\beta_L\) slider can't resolve (an hour-long half-life is \(\beta_L\approx0.9999923\)).</p>
+
+  <p><strong>4. Recent-severity channel</strong> — a normalized weighted average of the last \(K\) drops:</p>
+  <div class="eq">\[ \text{risk}^r_t = \frac{\sum_{k=0}^{K-1} \beta^{k}\,\tilde d_{t-k}^{\,\alpha}}{\sum_{k=0}^{K-1} \beta^{k}} \]</div>
+  <p>Keep \(K\) long enough that the window isn't decorative: \(K \gtrsim 3/(1-\beta)\) (e.g. \(\beta\approx0.98,\ K\approx150\)).</p>
+
+  <p><strong>5. The weight</strong> — combine both channels, floored so it can't overpunish:</p>
+  <div class="eq">\[ V_t = \operatorname{clip}\!\left(1 - \lambda_r\,(\text{risk}^r_t)^{1/\alpha} - \lambda_L\,(\text{risk}^L_t)^{1/\alpha},\ V_{\text{floor}},\ 1\right) \]</div>
+  <p>\(\lambda_L\) is anchored to a duty cycle you consider intolerable: if an attacker is "bad" a fraction \(\delta_{\text{bad}}\) of frames at severity \(c\) and you want its weight driven to \(V_{\text{target}}\), then \(\lambda_L = (1-V_{\text{target}})/(\delta_{\text{bad}}\cdot c)^{1/\alpha}\). The default here uses \(\delta_{\text{bad}}=0.30,\ c=1,\ V_{\text{target}}=0.5\ (\alpha=1)\Rightarrow \lambda_L\approx1.67\): an attacker bad 30% of the time is pulled to \(V=0.5\).</p>
+
+  <p><strong>6. Final reputation:</strong></p>
+  <div class="eq">\[ \boxed{\,R_t = R^{\text{calc}}_t \cdot F \cdot V_t\,} \]</div>
+
+  <h3>Every variable</h3>
+  <table>
+    <thead><tr><th>Symbol</th><th>Name</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td>\(R_t\)</td><td>reputation</td><td>The output reputation at step \(t\), after the penalty is applied</td></tr>
+      <tr><td>\(R^{\text{calc}}_t\)</td><td>base reputation</td><td>Your raw computed reputation before this penalty layer</td></tr>
+      <tr><td>\(F\)</td><td>external factor</td><td>Your existing multiplier (unchanged by this system)</td></tr>
+      <tr><td>\(d_t\)</td><td>signed change</td><td>Reputation last step minus this step; positive means a drop</td></tr>
+      <tr><td>\(D_{\text{range}}\)</td><td>drop scale</td><td>The drop size that counts as maximally severe; sets what a "1.0" drop means. Set near your real bad-day drop, not a literal worst case</td></tr>
+      <tr><td>\(\tilde d_t\)</td><td>normalized drop</td><td>The clipped drop in \([0,1]\); gains map to 0</td></tr>
+      <tr><td>\(\epsilon\)</td><td>drop dead-zone</td><td>Normalized threshold (\(0\)–\(0.1\)): drops below \(\epsilon\) — i.e. \(\epsilon\,D_{\text{range}}\) in raw units — are treated as no drop, so small jitter doesn't feed either channel</td></tr>
+      <tr><td>\(\text{risk}^L_t\)</td><td>persistence risk</td><td>Accumulated "drop debt." Grows with sustained falling, decays when stable — the core persistence detector</td></tr>
+      <tr><td>\(\beta_L\)</td><td>persistence memory</td><td>Decay rate of the accumulator (\(0\)–\(1\)), DERIVED from \(T_{1/2}\) via \(2^{-1/(f T_{1/2})}\) — not a direct knob. Higher = longer memory, more selective for persistence, slower rebound</td></tr>
+      <tr><td>\(T_{1/2}\)</td><td>persistence half-life</td><td>The real-time span over which accumulated risk halves — the knob you actually tune (up to 1 hour here)</td></tr>
+      <tr><td>\(f\)</td><td>frame rate</td><td>Frames per second; fixed at 25 here. Converts \(T_{1/2}\) into a frame count</td></tr>
+      <tr><td>\(N_{1/2},\,N_{\text{eff}}\)</td><td>span in frames</td><td>Half-life and soft memory span in frames: \(N_{1/2}=f T_{1/2}\), \(N_{\text{eff}}\approx1.44\,N_{1/2}\)</td></tr>
+      <tr><td>\(\alpha\)</td><td>drop-shape</td><td>Exponent on drops. \(\alpha=1\) is linear; \(\alpha<1\) punishes many-small over one-big; \(\alpha>1\) the reverse</td></tr>
+      <tr><td>\(\text{risk}^r_t\)</td><td>recent-severity risk</td><td>Bounded average of recent drops — "how bad have drops been lately"</td></tr>
+      <tr><td>\(\beta\)</td><td>recent decay</td><td>Weighting falloff inside the recent window (\(0\)–\(1\)). Higher = the window remembers older drops more evenly</td></tr>
+      <tr><td>\(K\)</td><td>window length</td><td>How many recent steps the severity channel looks back over</td></tr>
+      <tr><td>\(\lambda_L\)</td><td>persistence weight</td><td>How hard accumulated persistence pulls \(V\) down; defaulted from an intolerable duty cycle (\(\delta_{\text{bad}},c,V_{\text{target}}\))</td></tr>
+      <tr><td>\(\lambda_r\)</td><td>recent weight</td><td>How hard recent severity pulls \(V\) down (keep small vs \(\lambda_L\))</td></tr>
+      <tr><td>\(V_{\text{floor}}\)</td><td>floor</td><td>Minimum weight — caps the worst-case penalty so a bad streak stays recoverable</td></tr>
+      <tr><td>\(V_t\)</td><td>the weight</td><td>The penalty multiplier in \([V_{\text{floor}}, 1]\); near 1 = no penalty</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Optional machinery (not simulated here)</h3>
+  <p>These only matter if you persist \(\text{risk}^L\) per-ID across separate encounters; this single continuous trajectory exercises neither, so they're documented, not run. Cold-start debiasing during an ID's warm-up (\(t\) = frames observed for that ID): \(\widehat{\text{risk}}^L_t = \text{risk}^L_t/(1-\beta_L^{\,t})\). Gap handling on re-acquisition after an absence of \(\Delta t_{\text{gap}}\) seconds, applied once at rejoin: \(\text{risk}^L_{\text{rejoin}} = \beta_L^{\,f\,\Delta t_{\text{gap}}}\,\text{risk}^L_{\text{last}}\).</p>
+
+  <h3>Two derived quantities worth keeping in mind</h3>
+  <p>These aren't computed each step — they're properties of your parameter choices that tell you how the system behaves:</p>
+  <div class="eq">\[ S_L = (1-\beta_L)^{-1/\alpha} \qquad \text{(persistence ÷ single selectivity)} \]</div>
+  <p>The ratio by which a sustained slide is punished harder than a lone dip of the same step-size. The step-3 normalization leaves this ratio intact — a single drop contributes \((1-\beta_L)\), a sustained one saturates at \(1\). At \(\beta_L=0.95,\ \alpha=1\) it's \(20\times\).</p>
+  <div class="eq">\[ m_{1/2} = \frac{\alpha \ln 2}{-\ln \beta_L} \qquad \text{(rebound half-life, in steps)} \]</div>
+  <p>How many steps it takes the penalty to halve after drops stop; at \(\alpha=1\) this equals \(N_{1/2}\) exactly. Raising \(T_{1/2}\) improves \(S_L\) but lengthens \(m_{1/2}\) — that's the one real trade-off in the whole design.</p>
+</section>
+
+</div><!-- .wrap -->
+
+<script>
+(function(){
+  var FPS = 25;
+  var P = {
+    samples:{v:250, min:10, max:90000, log:true, label:"samples (frames)",
+      fmt:function(v){ var n=Math.round(v), s=n/FPS; return n+"  ("+(s>=60?(s/60).toFixed(1)+" min":s.toFixed(1)+" s")+")"; }},
+    Drange:{v:110, min:20, max:200, step:10, label:"D_range"},
+    eps:{v:0.015, min:0, max:0.1, step:0.005, label:"ε  (drop dead-zone)", fmt:function(v){return v.toFixed(3);}},
+    alpha:{v:1.10, min:0.4, max:2, step:0.1, label:"α  (drop-shape)"},
+    halfLifeS:{v:241.8, min:0.04, max:3600, log:true, label:"T½  (persistence half-life)",
+      fmt:function(v){ return v>=60?(v/60).toFixed(2)+" min":v.toFixed(2)+" s"; }},
+    lambdaL:{v:1000, min:0, max:1000, step:10, label:"λ_L  (persistence weight)"},
+    beta:{v:0.80, min:0.50, max:0.95, step:0.05, label:"β  (recent decay)"},
+    K:{v:158, min:1, max:1000, step:1, label:"K  (recent window)"},
+    lambdaR:{v:0.85, min:0, max:1, step:0.05, label:"λ_r  (recent weight)"},
+    vfloor:{v:0.60, min:0.2, max:1, step:0.05, label:"V_floor"}
+  };
+  var scenario = "steady";
+  function cssVar(n,fb){ try{ var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||fb; }catch(e){ return fb; } }
+  function fmt(k){ var p=P[k]; if(p.fmt) return p.fmt(p.v); return p.step<1 ? p.v.toFixed(2) : String(Math.round(p.v)); }
+  function gnorm(d){ var x=d/P.Drange.v-P.eps.v; return x<0?0:(x>1?1:x); }
+  function baseR(s){
+    var N=Math.round(P.samples.v);
+    var R=new Array(N).fill(100), t;
+    if(s==="steady"){ var seed=3, rnd=function(){seed=(seed*9301+49297)%233280;return seed/233280;}; for(t=1;t<N;t++){R[t]=Math.min(100,Math.max(93,R[t-1]+(rnd()-0.5)*3));} }
+    else if(s==="onoff"){ var per=Math.max(1,Math.round(0.1*N)); for(t=per;t<N;t+=per){ R[t]=80; } }
+    else if(s==="onoff2"){ var vals=[100,90,80,90,80,70,80,70,60,70],seg=Math.max(1,Math.floor(N/vals.length)); for(t=0;t<N;t++) R[t]=vals[Math.min(vals.length-1,Math.floor(t/seg))]; }
+    else if(s==="decline"){ for(t=Math.round(0.06*N);t<N;t++) R[t]=Math.max(55,R[t-1]-0.5); }
+    else if(s==="sharp"){ for(t=Math.round(0.33*N);t<N;t++) R[t]=60; }
+    else if(s==="twohit"){
+      var p1=Math.round(0.25*N), p2=Math.round(0.65*N), pl=Math.max(1,Math.round(0.03*N));
+      R[p1]=60; for(t=p1+1;t<p1+pl;t++) R[t]=60;
+      for(t=p1+pl;t<p2;t++) R[t]=Math.min(95,R[t-1]+0.5);
+      R[p2]=40; for(t=p2+1;t<p2+pl;t++) R[t]=40;
+      for(t=p2+pl;t<N;t++) R[t]=Math.min(85,R[t-1]+0.4);
+    }
+    return R;
+  }
+  function simulate(){
+    var N=Math.round(P.samples.v);
+    var a=P.alpha.v,lL=P.lambdaL.v,b=P.beta.v,K=Math.round(P.K.v),lR=P.lambdaR.v,vf=P.vfloor.v;
+    var Nhalf=FPS*P.halfLifeS.v, bL=Math.pow(2,-1/Nhalf);
+    var R=baseR(scenario), dn=new Array(N).fill(0), t,k;
+    for(t=1;t<N;t++) dn[t]=gnorm(R[t-1]-R[t]);
+    var W=0; for(k=0;k<K;k++) W+=Math.pow(b,k);
+    var V=new Array(N).fill(1), Rp=new Array(N).fill(100), riskL=0;
+    for(t=0;t<N;t++){
+      riskL=bL*riskL+(1-bL)*Math.pow(dn[t],a);
+      var num=0; for(k=0;k<K;k++){ if(t-k>=0) num+=Math.pow(b,k)*Math.pow(dn[t-k],a); }
+      V[t]=Math.min(1,Math.max(vf,1-lR*Math.pow(num/W,1/a)-lL*Math.pow(riskL,1/a)));
+      Rp[t]=R[t]*V[t];
+    }
+    return {R:R,V:V,Rp:Rp,bL:bL,Neff:1/(1-bL),SL:Math.pow(1-bL,-1/a),HL:a*Math.LN2/(-Math.log(bL))};
+  }
+  var cv=document.getElementById("chart"), sc=document.getElementById("sigchart");
+  function draw(){
+    try{
+      var N=Math.round(P.samples.v);
+      var s=simulate(),R=s.R,V=s.V,Rp=s.Rp,SL=s.SL,HL=s.HL,bL=s.bL,Neff=s.Neff;
+      var cT=cssVar('--text-muted','#767676'), cB=cssVar('--border','rgba(0,0,0,0.12)');
+      var amber=cssVar('--amber','#d55e00'), blue=cssVar('--blue','#0072b2');
+      var cTitle=cssVar('--text-primary','#1a1a1a');
+      var FG=vizFigure();
+      var dpr=window.devicePixelRatio||1, rect=cv.getBoundingClientRect(), w=rect.width||600, h=rect.height||360;
+      cv.width=w*dpr; cv.height=h*dpr; var ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+      var padL=54+FG.padLBoost,padR=8,padT=10,padB=38+FG.padBBoost;
+      var X=function(i){return padL+(w-padL-padR)*i/(N-1);};
+      var Yn=function(v){return padT+(h-padT-padB)*(1-v);};
+      var Yr=function(v){return padT+(h-padT-padB)*(1-v/100);};
+      ctx.strokeStyle=cB; ctx.fillStyle=cT; ctx.font=FG.tickFont; ctx.lineWidth=FG.grid;
+      [0,0.25,0.5,0.75,1].forEach(function(g){ ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(padL,Yn(g)); ctx.lineTo(w-padR,Yn(g)); ctx.stroke(); ctx.globalAlpha=1; ctx.textAlign='right'; ctx.fillText(g.toFixed(2),padL-6,Yn(g)+3); });
+      [0,0.25,0.5,0.75,1].forEach(function(fr){
+        var idx=Math.round(fr*(N-1)), px=X(idx);
+        ctx.strokeStyle=cB; ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(px,padT); ctx.lineTo(px,h-padB); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.fillStyle=cT; ctx.textAlign = fr===0?'left':(fr===1?'right':'center');
+        ctx.fillText(idx>=1000 ? (idx/1000).toFixed(idx>=10000?0:1)+'k' : String(idx), px, h-padB+14);
+      });
+      ctx.textAlign='left';
+      ctx.fillStyle=cTitle; ctx.font=FG.axisFont; ctx.textAlign='center';
+      ctx.fillText('Frame', (padL+(w-padR))/2, h-6);
+      vizYTitle(ctx, 'Reputation (R)', FG.axisPad, h);
+      ctx.textAlign='left';
+      function line(arr,c,dash,Yf){ ctx.strokeStyle=c; ctx.lineWidth=dash?FG.thin:FG.series; ctx.setLineDash(dash?[4,3]:[]); ctx.beginPath(); for(var i=0;i<arr.length;i++){ var y=Yf(arr[i]); if(i)ctx.lineTo(X(i),y); else ctx.moveTo(X(i),y);} ctx.stroke(); ctx.setLineDash([]); }
+      line(R,cT,true,Yr); line(V,amber,false,Yn); line(Rp,blue,false,Yr);
+      var mn=1; for(var j=0;j<V.length;j++){ if(V[j]<mn)mn=V[j]; }
+      document.getElementById("stat-min").textContent=mn.toFixed(3);
+      document.getElementById("stat-end").textContent=V[N-1].toFixed(3);
+      document.getElementById("stat-sl").textContent=(SL>=100?"100+":SL.toFixed(1))+"×";
+      document.getElementById("stat-hl").textContent=HL.toFixed(1);
+      document.getElementById("stat-bl").textContent=bL.toFixed(bL>0.999?6:4);
+      document.getElementById("stat-neff").textContent=Neff>=10000?Math.round(Neff/1000)+"k":Math.round(Neff).toString();
+      var sr=sc.getBoundingClientRect(), sw=sr.width||150, sh=sr.height||80;
+      sc.width=sw*dpr; sc.height=sh*dpr; var sx=sc.getContext('2d'); sx.setTransform(dpr,0,0,dpr,0,0); sx.clearRect(0,0,sw,sh);
+      var dmin=-20, dmax=P.Drange.v*1.2, pb=14, pl=4;
+      var SXf=function(d){return pl+(sw-pl-4)*((d-dmin)/(dmax-dmin));}, SYf=function(g){return 4+(sh-4-pb)*(1-g);};
+      sx.strokeStyle=cB; sx.globalAlpha=0.6; sx.beginPath(); sx.moveTo(pl,SYf(0)); sx.lineTo(sw-4,SYf(0)); sx.stroke(); sx.globalAlpha=1;
+      sx.strokeStyle=cT; sx.setLineDash([3,3]); sx.beginPath(); sx.moveTo(SXf(0),SYf(0)); sx.lineTo(SXf(0),SYf(1)); sx.stroke(); sx.setLineDash([]);
+      sx.strokeStyle=amber; sx.lineWidth=2; sx.beginPath();
+      for(var m=0;m<=60;m++){ var d=dmin+(dmax-dmin)*m/60, g=gnorm(d); if(m)sx.lineTo(SXf(d),SYf(g)); else sx.moveTo(SXf(d),SYf(g)); }
+      sx.stroke();
+      sx.fillStyle=cT; sx.font=FG.insetFont; sx.fillText("-20",pl,sh-2); sx.fillText("0",SXf(0)-3,sh-2); sx.fillText(String(Math.round(dmax)),sw-24,sh-2);
+    }catch(e){}
+  }
+  var ctrl=document.getElementById("controls");
+  Object.keys(P).forEach(function(key){
+    var p=P[key], wrap=document.createElement("div");
+    var head=document.createElement("div");
+    head.style.cssText="display:flex; justify-content:space-between; font-size:13px; color:var(--text-secondary); margin-bottom:4px;";
+    var lab=document.createElement("span"); lab.textContent=p.label;
+    var out=document.createElement("span"); out.style.cssText="font-weight:500; color:var(--text-primary);"; out.textContent=fmt(key);
+    head.appendChild(lab); head.appendChild(out); wrap.appendChild(head);
+    var inp=document.createElement("input"); inp.type="range";
+    if(p.log){
+      inp.min=Math.log10(p.min); inp.max=Math.log10(p.max); inp.step=(inp.max-inp.min)/300; inp.value=Math.log10(p.v);
+      inp.addEventListener("input",function(){ p.v=Math.pow(10,parseFloat(inp.value)); out.textContent=fmt(key); draw(); });
+    } else {
+      inp.min=p.min; inp.max=p.max; inp.step=p.step; inp.value=p.v;
+      inp.addEventListener("input",function(){ p.v=parseFloat(inp.value); out.textContent=fmt(key); draw(); });
+    }
+    wrap.appendChild(inp); ctrl.appendChild(wrap);
+  });
+  function setActive(btn){ var all=document.querySelectorAll(".scn"); for(var i=0;i<all.length;i++){ all[i].style.background="transparent"; all[i].style.borderColor="var(--border-strong)"; all[i].style.color="var(--text-primary)"; } btn.style.background="var(--bg-accent)"; btn.style.borderColor="var(--border-accent)"; btn.style.color="var(--text-accent)"; }
+  var btns=document.querySelectorAll(".scn");
+  for(var i=0;i<btns.length;i++){ (function(btn){ btn.addEventListener("click",function(){ scenario=btn.dataset.s; setActive(btn); draw(); }); })(btns[i]); }
+  setActive(btns[0]);
+  window.addEventListener("resize", draw);
+  setTimeout(draw,0);
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Freshness / reputation decay visualizer</title>
+<link rel="stylesheet" href="viz.css">
+<script src="viz.js"></script>
+<style>
+  *{box-sizing:border-box;}
+  body {
+    font-family: Cambria, Georgia, "Times New Roman", serif;
+    max-width: 554px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    color: var(--text-primary);
+    background: var(--bg);
+  }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 1.5rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; margin-bottom: 1.5rem; }
+  .row { display: flex; justify-content: space-between; font-size: 14px; color: var(--text-secondary); }
+  input[type="range"]{-webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:2px;
+    background:var(--border-strong); outline:none;}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none; width:18px; height:18px;
+    border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  input[type="range"]::-moz-range-thumb{width:18px; height:18px; border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  .panel { display: flex; flex-direction: column; gap: 12px; margin-bottom: 1rem; padding: 1rem; background: var(--surface-1); border-radius: var(--radius); }
+  .panel .line { display: flex; align-items: center; gap: 12px; }
+  .panel label { font-size: 14px; color: var(--text-secondary); white-space: nowrap; width: 150px; }
+  .panel span { font-size: 14px; font-weight: 500; min-width: 60px; text-align: right; }
+  .stats { display: flex; gap: 20px; margin-bottom: 1rem; flex-wrap: wrap; }
+  .stat-label { font-size: 13px; color: var(--text-secondary); }
+  .stat-value { font-size: 22px; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 8px; font-size: 12px; color: var(--text-secondary); }
+  .legend span { display: flex; align-items: center; gap: 4px; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  #chart-wrap { position: relative; height: 280px; }
+  .doc { margin-top: 2.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem; }
+  .doc h2 { font-size: 18px; font-weight: 600; margin: 0 0 1rem; }
+  .doc h3 { font-size: 15px; font-weight: 600; margin: 1.5rem 0 .5rem; color: var(--text-primary); }
+  .doc dl { margin: 0; }
+  .doc dt { font-weight: 600; font-size: 14px; color: var(--text-primary); margin-top: .75rem; }
+  .doc dd { margin: .15rem 0 0; font-size: 14px; color: var(--text-secondary); line-height: 1.55; }
+  .doc .default { color: var(--text-muted); }
+</style>
+<script>
+  window.MathJax = { tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] } };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js" async></script>
+</head>
+<body>
+
+<h1>Freshness / reputation decay visualizer</h1>
+
+<div class="grid">
+  <div>
+    <div class="row"><label>Fresh grace (ms)</label><span id="graceOut">40</span></div>
+    <input type="range" id="grace" min="0" max="300" step="5" value="40">
+  </div>
+  <div>
+    <div class="row"><label>Decay rate &rho;</label><span id="rhoOut">0.50</span></div>
+    <input type="range" id="rho" min="0.1" max="0.95" step="0.01" value="0.5">
+  </div>
+  <div>
+    <div class="row"><label>F floor</label><span id="floorOut">0.50</span></div>
+    <input type="range" id="floor" min="0" max="0.9" step="0.01" value="0.5">
+  </div>
+</div>
+
+<div class="panel">
+  <div class="line">
+    <label>Send-to-receive (ms)</label>
+    <input type="range" id="dt" min="0" max="400" step="5" value="300" style="flex:1;">
+    <span id="dtOut">300 ms</span>
+  </div>
+  <div class="line">
+    <label>Reputation</label>
+    <input type="range" id="rep" min="0" max="1" step="0.01" value="0.80" style="flex:1;">
+    <span id="repOut">0.80</span>
+  </div>
+</div>
+
+<div class="stats">
+  <div>
+    <div class="stat-label">F for this message</div>
+    <div class="stat-value" style="color:var(--amber);" id="fOut">1.000</div>
+  </div>
+  <div>
+    <div class="stat-label">reputation (unchanged)</div>
+    <div class="stat-value" style="color:var(--text-secondary);" id="repOldOut">0.800</div>
+  </div>
+  <div>
+    <div class="stat-label">reputation &times; F</div>
+    <div class="stat-value" style="color:var(--blue);" id="newRepOut">0.800</div>
+  </div>
+</div>
+
+<div class="legend">
+  <span><span class="swatch" style="background:var(--text-muted);"></span>reputation (unchanged)</span>
+  <span><span class="swatch" style="background:var(--blue);"></span>reputation &times; F (decayed)</span>
+  <span><span class="swatch" style="background:var(--amber);"></span>this message</span>
+</div>
+
+<div id="chart-wrap" class="chart-box">
+  <canvas id="chart" role="img" aria-label="Line chart comparing flat reputation versus reputation multiplied by freshness score F, across send to receive latency in milliseconds, with a marker at the chosen message latency"></canvas>
+</div>
+
+<section class="doc">
+  <h2>Feature explanation</h2>
+  <p style="font-size:14px; color:var(--text-secondary);">Freshness is applied as a per-message multiplier
+    \( F = \max\!\left(F_{\text{floor}},\ \rho^{\ \max(0,\ \delta t - \text{grace})}\right) \)
+    (Su, Jin, Song 2024, Eq. 1: \(w[n] = \rho^{t - t_n}\), with a grace window added).
+    \(\rho\) is a directly hand-tuned decay-per-second factor, not derived from the gate threshold.</p>
+
+  <h3>Formula parameters (top grid)</h3>
+  <dl>
+    <dt>Fresh grace (ms)</dt>
+    <dd>The window in which a message counts as fully fresh (\(F = 1\)). Any latency at or below this is
+      "free"; decay only starts once you cross it. <span class="default">Default 40&nbsp;ms.</span></dd>
+    <dt>Decay rate &rho;</dt>
+    <dd>The per-second decay base: \(\rho = 0.5\) means \(F\) halves every second of latency past the grace
+      window. Set directly, the same as the paper's \(\rho\) &mdash; not derived from any gate threshold.
+      <span class="default">Default 0.50.</span></dd>
+    <dt>F floor</dt>
+    <dd>The lower bound \(F\) can never fall below, no matter how stale the message.
+      <span class="default">Default 0.5.</span></dd>
+  </dl>
+
+  <h3>Message inputs (middle panel)</h3>
+  <dl>
+    <dt>Send-to-receive (ms)</dt>
+    <dd>\(\delta t\) for this specific message: how long it took to travel from sender to receiver. This is the
+      input that actually determines \(F\) for a given message; it's independent of the formula parameters above.</dd>
+    <dt>Reputation</dt>
+    <dd>The sender's existing reputation score before this message's freshness penalty is applied.</dd>
+  </dl>
+
+  <h3>Live stats</h3>
+  <dl>
+    <dt>F for this message</dt>
+    <dd>The freshness score computed from the current \(\delta t\) and the three formula parameters, using
+      \( F = \max\!\left(F_{\text{floor}},\ \rho^{\ \max(0,\ \delta t - \text{grace})}\right) \).</dd>
+    <dt>Reputation (unchanged)</dt>
+    <dd>What the sender's reputation would be if freshness weren't a factor at all — i.e., just the raw number you set.</dd>
+    <dt>Reputation &times; F</dt>
+    <dd>The actual updated reputation after the freshness penalty is applied. Since \(F \le 1\), this can only be
+      less than or equal to the unchanged value.</dd>
+  </dl>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const grace = document.getElementById('grace');
+const rho = document.getElementById('rho');
+const floor = document.getElementById('floor');
+const dt = document.getElementById('dt');
+const rep = document.getElementById('rep');
+
+const graceOut = document.getElementById('graceOut');
+const rhoOut = document.getElementById('rhoOut');
+const floorOut = document.getElementById('floorOut');
+const dtOut = document.getElementById('dtOut');
+const repOut = document.getElementById('repOut');
+const fOut = document.getElementById('fOut');
+const repOldOut = document.getElementById('repOldOut');
+const newRepOut = document.getElementById('newRepOut');
+
+// Resolve a CSS custom property so the chart shares the page palette (incl. dark mode).
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+// All internal math is in seconds; sliders are in milliseconds.
+// F = max(F_FLOOR, RHO_FRESH ^ max(0, delta_t_s - FRESH_GRACE_S))
+function computeF(tSec, gSec, rhoFresh, fFloor) {
+  return Math.max(fFloor, Math.pow(rhoFresh, Math.max(0, tSec - gSec)));
+}
+
+let chart;
+
+function update() {
+  const gMs = parseFloat(grace.value);
+  const r = parseFloat(rho.value);
+  const fl = parseFloat(floor.value);
+  const tMs = parseFloat(dt.value);
+  const rp = parseFloat(rep.value);
+
+  const g = gMs / 1000, t = tMs / 1000;
+
+  graceOut.textContent = gMs.toFixed(0);
+  rhoOut.textContent = r.toFixed(2);
+  floorOut.textContent = fl.toFixed(2);
+  dtOut.textContent = tMs.toFixed(0) + ' ms';
+  repOut.textContent = rp.toFixed(2);
+
+  const f = computeF(t, g, r, fl);
+  const newRep = f * rp;
+
+  fOut.textContent = f.toFixed(3);
+  repOldOut.textContent = rp.toFixed(3);
+  newRepOut.textContent = newRep.toFixed(3);
+
+  const maxTms = 400; // messages beyond this age don't survive the gate in practice
+  const n = 120;
+  const labels = [], flatData = [], decayData = [];
+  for (let i = 0; i <= n; i++) {
+    const xMs = (i / n) * maxTms;
+    labels.push(xMs);
+    flatData.push(rp);
+    decayData.push(computeF(xMs / 1000, g, r, fl) * rp);
+  }
+
+  if (!chart) {
+    const cUnchanged = cssVar('--text-muted', '#767676');
+    const cDecayed = cssVar('--blue', '#0072b2');
+    const cMarker = cssVar('--amber', '#d55e00');
+    const cGrid = cssVar('--border', 'rgba(0,0,0,0.12)');
+    Chart.defaults.color = cssVar('--text-secondary', '#4d4d4d');
+    Chart.defaults.font.family = 'Cambria, Georgia, "Times New Roman", serif';
+    const ctx = document.getElementById('chart');
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'reputation (unchanged)',
+            data: flatData,
+            borderColor: cUnchanged,
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            borderDash: [5, 4],
+            pointRadius: 0,
+            tension: 0
+          },
+          {
+            label: 'reputation x F (decayed)',
+            data: decayData,
+            borderColor: cDecayed,
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0
+          },
+          {
+            label: 'this message',
+            data: [],
+            borderColor: cMarker,
+            backgroundColor: cMarker,
+            pointRadius: 6,
+            showLine: false,
+            type: 'scatter'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            type: 'linear',
+            title: { display: true, text: 'Send-to-Receive Latency (ms)' },
+            min: 0,
+            max: maxTms,
+            grid: { color: cGrid }
+          },
+          y: {
+            min: 0,
+            max: 1.05,
+            title: { display: true, text: 'Reputation (R)' },
+            grid: { color: cGrid }
+          }
+        },
+        plugins: { legend: { display: false } }
+      }
+    });
+  } else {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = flatData;
+    chart.data.datasets[1].data = decayData;
+    chart.options.scales.x.max = maxTms;
+  }
+
+  chart.data.datasets[2].data = [{ x: tMs, y: newRep }];
+  chart.update('none');
+}
+
+[grace, rho, floor, dt, rep].forEach(el => el.addEventListener('input', update));
+update();
+</script>
+
+</body>
+</html>

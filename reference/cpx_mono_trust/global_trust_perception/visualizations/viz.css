@@ -1,0 +1,64 @@
+/* Shared design tokens for the reputation-multiplier visualizations.
+   Only the palette and figure-mode rules live here; each page keeps its own layout CSS.
+
+   Series hues are Okabe-Ito (blue #0072B2 / vermillion #D55E00): colourblind-safe and
+   distinguishable in greyscale, so a screenshot survives print reproduction. */
+:root{
+  --bg:#ffffff; --surface-1:#f4f4f5; --surface-2:#ffffff;
+  /* index.html names its panel token --surface; alias it so one block serves every page. */
+  --surface:#f4f4f5;
+  --text-primary:#1a1a1a; --text-secondary:#4d4d4d; --text-muted:#767676;
+  --border:rgba(0,0,0,0.12); --border-strong:rgba(0,0,0,0.24);
+  --bg-accent:#e7f0f7; --border-accent:#0072b2; --text-accent:#00527f;
+  --radius:8px; --amber:#d55e00; --blue:#0072b2;
+}
+
+/* Figure mode: strips the chart down for screenshots that go into the paper.
+   Stroke weights and font sizes are not expressible here — the canvases are drawn in
+   JS, so those live in vizFigure() in viz.js and are read at draw time. */
+body.figure-mode{
+  --surface-1:transparent;
+  --border:rgba(0,0,0,0.28);
+}
+body.figure-mode canvas{
+  background:#ffffff;
+}
+/* The legend sits above the canvas and lands in the same screenshot, so it scales with
+   the canvas type — a 13px legend over 18px ticks reads as a caption from another
+   figure. Each page sets its own .legend size; this overrides all of them at once.
+   Swatch geometry is inline per-page (dashed rules need height:0) and is left alone. */
+body.figure-mode .legend{
+  font-size:20px; gap:22px; margin-bottom:1rem;
+}
+
+/* Figure mode shortens the chart box so a near-ceiling line stops floating in empty
+   vertical space and the whole figure fits at paper size. Pages tag their chart
+   container with .chart-box and never set the figure height themselves; !important is
+   needed only because the base height is an inline style on those containers. */
+body.figure-mode .chart-box{
+  height:220px !important;
+}
+
+.viz-mode-toggle{
+  position:fixed; top:10px; right:12px; z-index:10;
+  display:flex; align-items:center; gap:7px;
+  padding:6px 11px; font-size:12px; font-family:inherit;
+  background:var(--surface-2); color:var(--text-secondary);
+  border:1px solid var(--border-strong); border-radius:var(--radius);
+  cursor:pointer; opacity:.55;
+}
+.viz-mode-toggle:hover{opacity:1;}
+.viz-mode-toggle .box{
+  width:11px; height:11px; border-radius:2px;
+  border:1px solid var(--text-secondary); background:transparent;
+}
+body.figure-mode .viz-mode-toggle{
+  color:var(--text-accent); border-color:var(--border-accent); opacity:1;
+}
+body.figure-mode .viz-mode-toggle .box{
+  background:var(--border-accent); border-color:var(--border-accent);
+}
+
+@media print{
+  .viz-mode-toggle{display:none;}
+}

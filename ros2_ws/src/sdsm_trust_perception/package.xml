@@ -12,10 +12,11 @@
     ros2/src/global_trust_tracker, and ros2/src/local_trust_estimation's
     trust-calculation core — see that repo for the full design writeup.
     Adapted for CPX-SDSM's SensorDataSharingMessage wire format via
-    pipeline/sdsm_codec.py (see its module docstring for what this sim's
-    wire format can and cannot supply, notably: no per-object local
-    certainty, so this port's judgment rests entirely on the second-layer
-    checks rather than on a sender's own claimed confidence).
+    global_trust_perception/pipeline/sdsm_codec.py (see its module
+    docstring for what this sim's wire format can and cannot supply,
+    notably: no per-object local certainty, so this port's judgment rests
+    entirely on the second-layer checks rather than on a sender's own
+    claimed confidence).
   </description>
   <maintainer email="lab@example.edu">Lab Maintainer</maintainer>
   <license>Apache-2.0</license>

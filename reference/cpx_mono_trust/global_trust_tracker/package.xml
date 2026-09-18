@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>global_trust_tracker</name>
+  <version>0.0.0</version>
+  <description>SORT tracker node: per-sender track state publisher for the V2X trust pipeline.</description>
+  <maintainer email="alinka.markova@gmail.com">Alex Markova</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>sdsm_interfaces</depend>
+  <depend>python3-numpy</depend>
+  <depend>python3-scipy</depend>
+  <!-- filterpy has no apt package; install via: pip3 install filterpy -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -319,9 +319,11 @@ CPX-Mono's two-layer design (local sensor confidence + cross-agent judgment),
 this port's trust judgment rests entirely on the second layer: whether a
 reported object is kinematically plausible given its prior track, whether its
 reported size agrees with what the judging vehicle itself sees, and whether
-peers corroborate it. See `sdsm_trust_perception/pipeline/sdsm_codec.py`'s
+peers corroborate it. See
+`sdsm_trust_perception/global_trust_perception/pipeline/sdsm_codec.py`'s
 module docstring for the full list of what this sim's wire format can and
-cannot supply, and `pipeline/trustworthy_perception.py`'s docstring for what
+cannot supply, and `global_trust_perception/pipeline/trustworthy_perception.py`'s
+docstring for what
 was and wasn't ported from CPX-Mono (notably: matching a judge's own report
 to a sender's is done by the reported `object_id`, which this sim already
 uses as a stable per-vehicle identity, rather than by CPX-Mono's spatial WBF

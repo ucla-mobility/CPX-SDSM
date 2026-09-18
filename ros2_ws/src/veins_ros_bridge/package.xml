@@ -16,7 +16,7 @@
   <!-- exec_depend, not depend: sdsm_trust_perception already exec_depends on
        this package (its launch file starts udp_bridge_node), so a full
        <depend> here would be a real build-order cycle. udp_bridge_node.py
-       imports sdsm_trust_perception.pipeline.sdsm_codec, a pure-Python
+       imports sdsm_trust_perception.global_trust_perception.pipeline.sdsm_codec, a pure-Python
        import resolved at runtime via the sourced overlay's PYTHONPATH, not a
        build-time dependency -- exec_depend is the correct (and sufficient)
        tag. -->

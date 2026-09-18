@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Global trust perception — reputation-multiplier visualizations</title>
+<link rel="stylesheet" href="viz.css">
+<style>
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{margin:0; display:flex; flex-direction:column; background:var(--bg); color:var(--text-primary);
+    font-family:Cambria, Georgia, "Times New Roman", serif;}
+  header{padding:1rem 1.25rem .75rem; border-bottom:1px solid var(--border-strong);}
+  h1{font-size:16px; font-weight:500; margin:0 0 .75rem;}
+  .tabs{display:flex; gap:8px; flex-wrap:wrap;}
+  button.tab{padding:8px 16px; font-size:14px; font-family:inherit; background:transparent;
+    color:var(--text-primary); border:1px solid var(--border-strong); border-radius:var(--radius); cursor:pointer;}
+  button.tab:hover{background:var(--surface);}
+  button.tab[aria-selected="true"]{background:var(--bg-accent); border-color:var(--border-accent); color:var(--text-accent);}
+  main{flex:1; min-height:0;}
+  iframe{width:100%; height:100%; border:0; display:block; background:var(--bg);}
+</style>
+</head>
+<body>
+<header>
+  <h1>Reputation-multiplier visualizations</h1>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" data-src="persistence_penalty.html" aria-selected="true">Persistence Penalty</button>
+    <button class="tab" role="tab" data-src="absence_decay.html" aria-selected="false">Absence Decay</button>
+    <button class="tab" role="tab" data-src="freshness_factor.html" aria-selected="false">Freshness Factor</button>
+    <button class="tab" role="tab" data-src="dynamic_threshold.html" aria-selected="false">Dynamic Threshold</button>
+    <button class="tab" role="tab" data-src="reputation_update.html" aria-selected="false">Reputation Update</button>
+  </div>
+</header>
+<main>
+  <iframe id="viz" title="visualization" src="persistence_penalty.html"></iframe>
+</main>
+<script>
+  var frame = document.getElementById("viz");
+  var tabs = document.querySelectorAll(".tab");
+  for (var i = 0; i < tabs.length; i++) {
+    (function(btn){
+      btn.addEventListener("click", function(){
+        if (btn.getAttribute("aria-selected") === "true") return;
+        for (var j = 0; j < tabs.length; j++) tabs[j].setAttribute("aria-selected", "false");
+        btn.setAttribute("aria-selected", "true");
+        frame.src = btn.dataset.src;
+      });
+    })(tabs[i]);
+  }
+</script>
+</body>
+</html>

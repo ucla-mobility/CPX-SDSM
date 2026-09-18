@@ -26,10 +26,10 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from sdsm_msgs.msg import SensorDataSharingMessage
 from sdsm_trust_interfaces.msg import ReceivedSdsm
-from sdsm_trust_perception.pipeline import sdsm_codec as codec
+from sdsm_trust_perception.global_trust_perception.pipeline import sdsm_codec as codec
 
 # Decoding a buildSdsmJson() dict into a SensorDataSharingMessage lives in
-# sdsm_trust_perception.pipeline.sdsm_codec (codec.sdsm_from_dict) -- the same
+# sdsm_trust_perception.global_trust_perception.pipeline.sdsm_codec (codec.sdsm_from_dict) -- the same
 # function an offline replay of a rosBridgeMode="log" .jsonl file uses, since
 # RosSDSMApp.cc emits byte-identical JSON on both paths. Kept in that package
 # (not here) because that's where the rest of this wire format's field-level

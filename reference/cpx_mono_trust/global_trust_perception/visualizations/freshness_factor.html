@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Freshness Factor</title>
+<link rel="stylesheet" href="viz.css">
+<script src="viz.js"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0; padding:2rem 1.25rem; background:var(--bg); color:var(--text-primary);
+    font-family:Cambria, Georgia, "Times New Roman", serif; line-height:1.6;}
+  .wrap{max-width:693px; margin:0 auto;}
+  h1{font-size:22px; font-weight:500; margin:0 0 1.25rem;}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:2px;
+    background:var(--border-strong); outline:none;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none; width:18px; height:18px;
+    border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  input[type=range]::-moz-range-thumb{width:18px; height:18px; border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  .legend{display:flex; gap:16px; margin-bottom:.75rem; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);}
+  .legend span{display:flex; align-items:center; gap:6px;}
+  .stat{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem;}
+  .stat .lbl{font-size:13px; color:var(--text-secondary);}
+  .stat .val{font-size:22px; font-weight:500;}
+  .doc{margin-top:2.5rem; border-top:1px solid var(--border); padding-top:1.5rem;}
+  .doc h2{font-size:18px; font-weight:600; margin:0 0 1rem;}
+  .doc h3{font-size:15px; font-weight:600; margin:1.75rem 0 .5rem;}
+  .doc p{font-size:14px; color:var(--text-secondary); margin:.4rem 0;}
+  .doc .eq{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem; margin:.5rem 0; overflow-x:auto;}
+  .doc table{width:100%; border-collapse:collapse; font-size:13px; margin-top:.5rem;}
+  .doc th,.doc td{text-align:left; padding:.5rem .6rem; border-bottom:1px solid var(--border); vertical-align:top;}
+  .doc th{color:var(--text-secondary); font-weight:600;}
+  .doc td:first-child{white-space:nowrap;}
+  .doc td:nth-child(2){color:var(--text-primary); font-weight:500; white-space:nowrap;}
+  .doc td:nth-child(3){color:var(--text-secondary);}
+</style>
+<script>
+  window.MathJax = { tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] } };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js" async></script>
+</head>
+<body>
+<div class="wrap">
+<h1>Freshness Factor</h1>
+
+<div style="display:flex; align-items:center; gap:12px; margin-bottom:.75rem;">
+  <label style="font-size:14px; color:var(--text-secondary); white-space:nowrap; min-width:150px;">Send-to-receive (ms)</label>
+  <input type="range" id="fresh-dt" min="0" max="400" step="5" value="20" style="flex:1;">
+  <span id="fresh-dt-out" style="font-size:14px; font-weight:500; min-width:60px; text-align:right;">20 ms</span>
+</div>
+<div style="display:flex; align-items:center; gap:12px; margin-bottom:1rem;">
+  <label style="font-size:14px; color:var(--text-secondary); white-space:nowrap; min-width:150px;">Vehicle speed (m/s)</label>
+  <input type="range" id="fresh-speed" min="0" max="40" step="1" value="15" style="flex:1;">
+  <span id="fresh-speed-out" style="font-size:14px; font-weight:500; min-width:60px; text-align:right;">15 m/s</span>
+</div>
+
+<div class="legend">
+  <span><span style="width:16px; height:3px; background:var(--amber); display:inline-block;"></span>F(Δt)</span>
+  <span><span style="width:16px; height:0; border-top:2px dashed var(--text-muted);"></span>F_floor</span>
+</div>
+
+<div class="chart-box" style="position:relative; height:320px; margin-bottom:.5rem;"><canvas id="fresh-chart" style="width:100%; height:100%;"></canvas></div>
+
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:1.25rem;">
+  <div class="stat"><div class="lbl">F at selected Δt</div><div class="val" id="fresh-stat-f">&mdash;</div></div>
+  <div class="stat"><div class="lbl">regime</div><div class="val" id="fresh-stat-regime" style="font-size:14px; padding-top:6px;">&mdash;</div></div>
+  <div class="stat"><div class="lbl">blind distance</div><div class="val" id="fresh-stat-blind">&mdash;</div></div>
+</div>
+
+<div id="fresh-controls" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px 20px; margin-bottom:2rem;"></div>
+
+<section class="doc">
+  <h2>Freshness factor</h2>
+  <p>F penalises messages whose <em>position</em> information has gone stale in transit. Applied once per frame as \(R_{\text{eff}} = R \cdot F \cdot V\); it never modifies stored reputation. Staleness is measured not by latency itself but by how far the sender could have moved during it — its <em>blind distance</em>.</p>
+  <div class="eq">\[ d_{\text{blind}} = v \cdot \Delta t \qquad F = \max\!\left(F_{\text{floor}},\ \rho^{\,\max(0,\ d_{\text{blind}} - \text{grace})\,/\,D}\right) \]</div>
+  <p>A stationary sender (\(v = 0\)) is never penalised, however laggy the message. Otherwise F halves every \(D\) metres of blind distance past the grace band. Since \(\rho < 1\) and \(F_{\text{floor}} < R^*\), a sufficiently blind-distant sender always fails the gate regardless of reputation.</p>
+  <p style="font-size:13px;">Constants mirror <code>kinematic_freshness.py</code> (GRACE_M, RHO_DIST, D_THRESHOLD_M, F_FLOOR); \(v\) comes from <code>sender_motion.SenderMotionHistory</code> and \(\Delta t\) from <code>perception_message.send_latency_of</code>. Timestamps are trusted inputs here — spoofing one is a separate concern (Stage 1b's kinematic checks).</p>
+  <h3>Every variable</h3>
+  <table>
+    <thead><tr><th>Symbol</th><th>Name</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td>\(v\)</td><td>sender speed (m/s)</td><td>Smoothed estimate of the sender's own speed from consecutive reference positions</td></tr>
+      <tr><td>\(\Delta t\)</td><td>latency (s)</td><td>Send-to-receive wall-clock difference for this message's transmission</td></tr>
+      <tr><td>\(d_{\text{blind}}\)</td><td>blind distance (m)</td><td>\(v \cdot \Delta t\): how far the sender could have travelled while the message was in flight</td></tr>
+      <tr><td>grace</td><td>grace distance (m)</td><td>Blind distance allowed before any penalty (default 1 m); guards low-speed GPS/estimate jitter</td></tr>
+      <tr><td>\(\rho\)</td><td>decay base</td><td>Per-\(D\)-metres decay, hand-tuned (default 0.5): F falls by one factor of \(\rho\) every D metres</td></tr>
+      <tr><td>\(D\)</td><td>decay scale (m)</td><td>Metres of blind distance per factor of \(\rho\) (default 2 m)</td></tr>
+      <tr><td>\(F_{\text{floor}}\)</td><td>floor</td><td>Minimum F (default 0.5). Must stay below R* or a floored agent could still pass the gate</td></tr>
+      <tr><td>\(R^*\)</td><td>gate crossover</td><td>Reputation above which agents pass the gate (currently the fixed 0.6 threshold)</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</div><!-- .wrap -->
+
+<script>
+(function(){
+  var freshDt=document.getElementById("fresh-dt");
+  var freshDtOut=document.getElementById("fresh-dt-out");
+  var freshSpeed=document.getElementById("fresh-speed");
+  var freshSpeedOut=document.getElementById("fresh-speed-out");
+
+  // Constants mirror kinematic_freshness.py; exposed as sliders for exploration.
+  var PF={
+    grace:{v:1.0, min:0, max:5, step:0.1, label:"grace (m)  GRACE_M",
+      fmt:function(v){return v.toFixed(1)+" m";}},
+    rho:{v:0.5, min:0.1, max:0.95, step:0.01, label:"decay base ρ  RHO_DIST",
+      fmt:function(v){return v.toFixed(2);}},
+    dthr:{v:2.0, min:0.5, max:10, step:0.5, label:"D  D_THRESHOLD_M",
+      fmt:function(v){return v.toFixed(1)+" m";}},
+    floor:{v:0.5, min:0.0, max:0.9, step:0.01, label:"F_floor  F_FLOOR",
+      fmt:function(v){return v.toFixed(2);}}
+  };
+
+  // R* = reputation.trust_fixed_point(); currently the fixed 0.6 gate threshold.
+  var R_STAR=0.6;
+
+  function cssF(n,fb){try{var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();return v||fb;}catch(e){return fb;}}
+  function fmtF(k){var p=PF[k];return p.fmt?p.fmt(p.v):(p.step<1?p.v.toFixed(2):String(Math.round(p.v)));}
+
+  function freshF(dt, speed){
+    var grace=PF.grace.v, rho=PF.rho.v, dthr=PF.dthr.v, floor=PF.floor.v;
+    var eff=Math.max(0, speed*dt - grace);
+    return Math.max(floor, Math.pow(rho, eff/dthr));
+  }
+
+  var fvc=document.getElementById("fresh-chart");
+
+  function drawFresh(){
+    try{
+      var dt=parseFloat(freshDt.value)/1000;
+      var speed=parseFloat(freshSpeed.value);
+      var rs=R_STAR, F=freshF(dt, speed);
+      var grace=PF.grace.v, floor=PF.floor.v;
+      var blind=speed*dt;
+
+      var regime;
+      if(blind<=grace) regime="fresh  (F = 1)";
+      else if(F>rs) regime="reputation-sensitive";
+      else if(F>floor) regime="unconditional fail";
+      else regime="floored";
+
+      document.getElementById("fresh-stat-f").textContent=F.toFixed(4);
+      document.getElementById("fresh-stat-regime").textContent=regime;
+      document.getElementById("fresh-stat-blind").textContent=blind.toFixed(2)+" m";
+
+      var cT=cssF('--text-primary','#1a1a1a'), cM=cssF('--text-muted','#767676');
+      var cB=cssF('--border','rgba(0,0,0,0.12)');
+      var amber=cssF('--amber','#d55e00');
+      var FG=vizFigure();
+
+      var dpr=window.devicePixelRatio||1, rect=fvc.getBoundingClientRect(), w=rect.width||600, h=rect.height||320;
+      fvc.width=w*dpr; fvc.height=h*dpr;
+      var ctx=fvc.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+
+      var maxDt=0.4, padL=54+FG.padLBoost, padR=12, padT=14, padB=40+FG.padBBoost;
+      var X=function(t){return padL+(w-padL-padR)*t/maxDt;};
+      var Y=function(v){return padT+(h-padT-padB)*(1-v);};
+
+      ctx.strokeStyle=cB; ctx.fillStyle=cM; ctx.font=FG.tickFont; ctx.lineWidth=FG.grid;
+      [0,0.25,0.5,0.75,1].forEach(function(g){
+        ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(padL,Y(g)); ctx.lineTo(w-padR,Y(g)); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.textAlign='right'; ctx.fillText(g.toFixed(2),padL-6,Y(g)+3);
+      });
+      [0,0.1,0.2,0.3,0.4].forEach(function(t){
+        var px=X(t);
+        ctx.strokeStyle=cB; ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(px,padT); ctx.lineTo(px,h-padB); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.fillStyle=cM; ctx.textAlign=(t===0?"left":(t===maxDt?"right":"center"));
+        ctx.fillText((t*1000).toFixed(0)+"ms",px,h-padB+14);
+      });
+      ctx.textAlign="left";
+      ctx.fillStyle=cT; ctx.font=FG.axisFont; ctx.textAlign="center";
+      ctx.fillText('Send-to-Receive Latency (ms)', (padL+(w-padR))/2, h-6);
+      vizYTitle(ctx, 'Freshness Factor (F)', FG.axisPad, h);
+      ctx.textAlign="left";
+
+      if(speed>0){
+        var tg=grace/speed;  // latency at which blind distance reaches the grace band
+        if(tg<=maxDt){
+          ctx.strokeStyle=cM; ctx.lineWidth=1; ctx.globalAlpha=0.5; ctx.setLineDash([3,3]);
+          ctx.beginPath(); ctx.moveTo(X(tg),padT); ctx.lineTo(X(tg),h-padB); ctx.stroke();
+          ctx.globalAlpha=1; ctx.setLineDash([]);
+          ctx.fillStyle=cM; ctx.font=FG.smallFont; ctx.textAlign="center";
+          ctx.fillText("grace",X(tg),padT+10);
+          ctx.textAlign="left";
+        }
+      }
+
+      ctx.strokeStyle=cM; ctx.lineWidth=FG.grid; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(padL,Y(floor)); ctx.lineTo(w-padR,Y(floor)); ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.strokeStyle=amber; ctx.lineWidth=FG.series; ctx.beginPath();
+      for(var i=0;i<=400;i++){
+        var t_i=maxDt*i/400, f_i=freshF(t_i, speed);
+        if(i===0) ctx.moveTo(X(t_i),Y(f_i)); else ctx.lineTo(X(t_i),Y(f_i));
+      }
+      ctx.stroke();
+
+      var pxdt=X(dt);
+      ctx.strokeStyle=cT; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(pxdt,padT); ctx.lineTo(pxdt,h-padB); ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle=amber;
+      ctx.beginPath(); ctx.arc(pxdt,Y(F),5,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle=cT; ctx.font=FG.tickFont;
+      var lx=pxdt+8, ly=Y(F)-6;
+      if(lx+44>w-padR) lx=pxdt-50;
+      // At F = 1 the point sits on the top gridline, where the label would collide
+      // with the "grace" marker; drop it below the point instead.
+      if(ly<padT+14) ly=Y(F)+34;   // clears the "grace" marker's row too
+      ctx.fillText("F="+F.toFixed(3),lx,ly);
+    }catch(e){}
+  }
+
+  var fctrl=document.getElementById("fresh-controls");
+  Object.keys(PF).forEach(function(key){
+    var p=PF[key], wrap=document.createElement("div");
+    var head=document.createElement("div");
+    head.style.cssText="display:flex; justify-content:space-between; font-size:13px; color:var(--text-secondary); margin-bottom:4px;";
+    var lab=document.createElement("span"); lab.textContent=p.label;
+    var out=document.createElement("span"); out.style.cssText="font-weight:500; color:var(--text-primary);"; out.textContent=fmtF(key);
+    head.appendChild(lab); head.appendChild(out); wrap.appendChild(head);
+    var inp=document.createElement("input"); inp.type="range";
+    inp.min=p.min; inp.max=p.max; inp.step=p.step; inp.value=p.v;
+    inp.addEventListener("input",function(){p.v=parseFloat(inp.value); out.textContent=fmtF(key); drawFresh();});
+    wrap.appendChild(inp); fctrl.appendChild(wrap);
+  });
+
+  freshDt.addEventListener("input",function(){
+    freshDtOut.textContent=freshDt.value+" ms";
+    drawFresh();
+  });
+  freshDtOut.textContent=freshDt.value+" ms";
+
+  freshSpeed.addEventListener("input",function(){
+    freshSpeedOut.textContent=freshSpeed.value+" m/s";
+    drawFresh();
+  });
+  freshSpeedOut.textContent=freshSpeed.value+" m/s";
+
+  window.addEventListener("resize", drawFresh);
+  setTimeout(drawFresh, 0);
+})();
+</script>
+
+</body>
+</html>

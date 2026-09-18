@@ -61,21 +61,21 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 from sdsm_trust_interfaces.msg import ReceivedSdsm, TrustVerdict
-from sdsm_trust_perception.pipeline import sdsm_codec as codec
-from sdsm_trust_perception.pipeline.persistent_reputation_tracker import (
+from sdsm_trust_perception.global_trust_perception.pipeline import sdsm_codec as codec
+from sdsm_trust_perception.global_trust_perception.pipeline.persistent_reputation_tracker import (
     BATCH_SIZE,
     PersistentReputationTracker,
 )
-from sdsm_trust_perception.pipeline.trustworthy_perception import (
+from sdsm_trust_perception.global_trust_perception.pipeline.trustworthy_perception import (
     FrameStats,
     TrustEngine,
     VERDICT_DEFERRED,
     VERDICT_MATCHED,
     VERDICT_UNCORROBORATED,
 )
-from sdsm_trust_perception.trust_calculations.consistency import T_DEADLINE_S
-from sdsm_trust_perception.trust_calculations.consistency_checks.kinematic_checks import TrackData
-from sdsm_trust_perception.tracking.SORT.modified_sort_centroid import Sort
+from sdsm_trust_perception.global_trust_perception.trust_calculations.consistency import T_DEADLINE_S
+from sdsm_trust_perception.global_trust_perception.trust_calculations.consistency_checks.kinematic_checks import TrackData
+from sdsm_trust_perception.global_trust_perception.tracking.SORT.modified_sort_centroid import Sort
 
 _VERDICT_TO_WIRE = {
     VERDICT_MATCHED: TrustVerdict.VERDICT_MATCHED,
