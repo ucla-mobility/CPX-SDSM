@@ -442,9 +442,13 @@ class TrustEngine:
             other_score_list = _row_or_default(
                 (scores_by_agent or {}).get(agent_id), len(other_positions), 1.0
             )
-            support_by_det = {
-                j: (R_old * other_score_list[j]) for j in range(len(other_positions))
-            }
+            # No independent witness exists in this port for an other_only detection
+            # (no cross-sender spatial clustering -- see module docstring): a sender's
+            # own reputation can never corroborate its own report. Ego's direct match
+            # is the only real corroboration available; genuinely uncorroborated
+            # reports fall through to the deferred ledger's timeout judgment instead
+            # of a same-frame "someone confirmed it" verdict.
+            support_by_det = {j: 0.0 for j in range(len(other_positions))}
             corroborated = {
                 j for j in range(len(other_positions))
                 if j in matched_other or is_corroborated(support_by_det.get(j, 0.0))

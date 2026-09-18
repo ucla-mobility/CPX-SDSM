@@ -64,6 +64,21 @@ simple RosSDSMApp extends DemoBaseApplLayer
         double detectionRange @unit(m) = default(300m);     // include neighbors within this range
         double detectionMaxAge @unit(s) = default(2s);      // discard neighbors not heard for this long
 
+        // --- Sensor/reporting imperfection (off by default = ground-truth-clean, as before) ---
+        // Everything below is 0/off unless explicitly enabled in a [Config]. With these off,
+        // every reported object is exactly SUMO ground truth, same as the original behavior.
+        double positionNoiseStdDev @unit(m) = default(0m);  // Gaussian jitter added to each reported
+                                                             // object's position before transmission
+        double attackerFraction       = default(0.0);       // fraction of nodes that misbehave, deterministically
+                                                             // selected by nodeIndex_ (0 = no attackers)
+        string attackType             = default("phantom"); // "phantom" = fabricate an extra object nobody else
+                                                             // sees; "spoof" = teleport a real reported object
+        double spoofJumpDistance @unit(m) = default(150m);  // "spoof" attacker's reported displacement
+        bool   attackerPureMode       = default(false);     // true = attacker reports ONLY its fabrication
+                                                             // (no legitimate objects), so its reputation
+                                                             // can't climb from honest traffic and self-vouch
+                                                             // for the lie (see README's trust_sdsm_v2 section)
+
         // ==================================================================
         // v2 scheduler parameters (used when hybridVariant="v2" or greedyVariant="v2";
         // the parallel-threshold scheduler is shared across HybridSDSM_v2, Greedy_v2,

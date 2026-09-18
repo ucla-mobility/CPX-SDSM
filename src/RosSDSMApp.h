@@ -135,6 +135,23 @@ private:
     int maxObjectsPerSdsm_ = 16;
     double detectionRange_ = 300.0;
     double detectionMaxAge_ = 2.0;
+
+    // Sensor/reporting imperfection (off by default; see RosSDSMApp.ned)
+    double positionNoiseStdDev_ = 0.0;
+    double attackerFraction_ = 0.0;
+    std::string attackType_ = "phantom";
+    double spoofJumpDistance_ = 150.0;
+    bool attackerPureMode_ = false;
+    bool isAttacker_ = false;
+    // Fixed, attacker-relative offset for the "phantom" object, chosen once so it moves
+    // smoothly with the attacker (a trackable, if fake, trajectory) instead of teleporting
+    // to a fresh random spot every send -- see initialize().
+    double phantomOffsetX_ = 0.0;
+    double phantomOffsetY_ = 0.0;
+    // Stable spoof target: fixed once an attacker has a real neighbor to pick, so the same
+    // tracked object_id gets teleported repeatedly (a real before/after discontinuity),
+    // instead of whichever object happens to be closest that particular send.
+    int spoofTargetId_ = -1;
     static constexpr int SDSM_BASE_BYTES = 40;
     // Per-object bytes: 24 legacy + 2 for obj_measurement_time_ms (uint16_t) added in v2.
     static constexpr int SDSM_PER_OBJECT_BYTES = 26;

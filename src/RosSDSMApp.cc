@@ -363,6 +363,12 @@ void RosSDSMApp::initialize(int stage) {
         detectionRange_ = par("detectionRange").doubleValue();
         detectionMaxAge_ = par("detectionMaxAge").doubleValue();
 
+        positionNoiseStdDev_ = par("positionNoiseStdDev").doubleValue();
+        attackerFraction_ = par("attackerFraction").doubleValue();
+        attackType_ = par("attackType").stdstringValue();
+        spoofJumpDistance_ = par("spoofJumpDistance").doubleValue();
+        attackerPureMode_ = par("attackerPureMode").boolValue();
+
         csvLoggingEnabled_ = par("csvLoggingEnabled").boolValue();
         txrxLogEnabled_ = par("txrxLogEnabled").boolValue();
         rxLogEveryNth_ = par("rxLogEveryNth").intValue();
@@ -384,6 +390,23 @@ void RosSDSMApp::initialize(int stage) {
 
         nodeIndex_ = getParentModule() ? getParentModule()->getIndex() : -1;
         localCmdPort_ = rosCmdPortBase_ + std::max(0, nodeIndex_);
+
+        // Deterministic attacker selection: with attackerFraction=0.2, every 5th node
+        // (by nodeIndex_) misbehaves -- same node each run for a given topology, no RNG
+        // needed for "who is the attacker" so it's trivial to reason about in results.
+        if (attackerFraction_ > 0.0 && nodeIndex_ >= 0) {
+            const int period = std::max(1, static_cast<int>(std::round(1.0 / attackerFraction_)));
+            isAttacker_ = (nodeIndex_ % period == 0);
+        }
+        if (isAttacker_ && attackType_ == "phantom") {
+            // Chosen ONCE per attacker (not per-send) so the phantom moves smoothly at a
+            // fixed offset from its sender -- a stable, trackable-but-fake trajectory,
+            // instead of teleporting to a fresh random spot every message.
+            const double ang = uniform(0.0, 2 * M_PI);
+            const double dist = uniform(20.0, std::max(20.0, std::min(80.0, detectionRange_)));
+            phantomOffsetX_ = dist * std::cos(ang);
+            phantomOffsetY_ = dist * std::sin(ang);
+        }
 
         if (bridgeMode_ == BridgeMode::Live) {
             udpPollTimer_ = new cMessage("rosUdpPollTimer");
@@ -1289,6 +1312,31 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
         }
     }
 
+    // "spoof" attacker: lock onto ONE real neighbor id the first time it's available, and
+    // keep spoofing that SAME id on every subsequent send -- the kinematic check needs a
+    // consistent object_id across frames to see a before/after discontinuity against; a
+    // different victim each send never accumulates a track to violate.
+    if (isAttacker_ && attackType_ == "spoof" && spoofTargetId_ < 0 && !selected.empty()) {
+        spoofTargetId_ = selected.front().id;
+    }
+
+    // "Pure" attacker mode: suppress every legitimate object this node would otherwise
+    // report, so its reputation can only ever move from its fabrication -- it never climbs
+    // on the back of honest traffic and self-corroborates the lie (see README's
+    // trust_sdsm_v2 section for why a mixed honest+lying attacker currently gets through).
+    // "spoof" keeps exactly the locked-on target (nothing to teleport otherwise);
+    // "phantom" drops everything, since the fabrication is appended separately below.
+    if (isAttacker_ && attackerPureMode_) {
+        if (attackType_ == "spoof" && spoofTargetId_ >= 0) {
+            selected.erase(
+                std::remove_if(selected.begin(), selected.end(),
+                               [this](const DetCandidate& c) { return c.id != spoofTargetId_; }),
+                selected.end());
+        } else {
+            selected.clear();
+        }
+    }
+
     int numObj = static_cast<int>(selected.size());
     payload->setNumObjects(numObj);
 
@@ -1301,9 +1349,26 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
 
         payload->setObj_type(i, 1);  // vehicle
         payload->setObject_id(i, c.id);
+
+        // Reported position: ground truth, plus optional sensor-noise jitter (does NOT
+        // touch neighborInfo_'s true ni.x/ni.y -- only what gets serialized onto the wire).
+        double reportX = ni.x;
+        double reportY = ni.y;
+        if (positionNoiseStdDev_ > 0.0) {
+            reportX += normal(0.0, positionNoiseStdDev_);
+            reportY += normal(0.0, positionNoiseStdDev_);
+        }
+        // "spoof" attacker: teleport the locked-on target's position by a large,
+        // physically-implausible jump -- targets the kinematic-plausibility check specifically.
+        if (isAttacker_ && attackType_ == "spoof" && c.id == spoofTargetId_) {
+            const double ang = uniform(0.0, 2 * M_PI);
+            reportX += spoofJumpDistance_ * std::cos(ang);
+            reportY += spoofJumpDistance_ * std::sin(ang);
+        }
+
         // Offset from sender's position, in 0.1m units
-        payload->setOffset_x(i, static_cast<int>(std::round((ni.x - pos.x) * 10.0)));
-        payload->setOffset_y(i, static_cast<int>(std::round((ni.y - pos.y) * 10.0)));
+        payload->setOffset_x(i, static_cast<int>(std::round((reportX - pos.x) * 10.0)));
+        payload->setOffset_y(i, static_cast<int>(std::round((reportY - pos.y) * 10.0)));
         payload->setOffset_z(i, 0);
         payload->setObj_speed(i, static_cast<int>(std::round(ni.speed / 0.02)));
 
@@ -1319,6 +1384,29 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
 
         lastSentPerceptionSet_[c.id] = ni;
         objectLastIncluded_[c.id] = {ni.x, ni.y, ni.speed, simTime()};
+    }
+
+    // "phantom" attacker: append one fabricated object nobody else will ever report --
+    // targets the corroboration / deferred-ledger path, not the kinematic check. Uses a
+    // sentinel id well outside any real nodeIndex_ range so it can never collide with (and
+    // get corroborated by) an actual vehicle.
+    if (isAttacker_ && attackType_ == "phantom" && numObj < 32 && numObj < maxObjectsPerSdsm_) {
+        const int phantomId = 900000 + nodeIndex_;
+        // Fixed offset chosen once in initialize() -- moves smoothly with the attacker
+        // rather than teleporting to a new random spot every send (see phantomOffsetX_/Y_).
+        const double phantomX = pos.x + phantomOffsetX_;
+        const double phantomY = pos.y + phantomOffsetY_;
+
+        payload->setObj_type(numObj, 1);
+        payload->setObject_id(numObj, phantomId);
+        payload->setOffset_x(numObj, static_cast<int>(std::round((phantomX - pos.x) * 10.0)));
+        payload->setOffset_y(numObj, static_cast<int>(std::round((phantomY - pos.y) * 10.0)));
+        payload->setOffset_z(numObj, 0);
+        payload->setObj_speed(numObj, 0);
+        payload->setObj_heading(numObj, 28800);  // unavailable
+        payload->setObj_measurement_time_ms(numObj, static_cast<uint16_t>(static_cast<long>(now * 1000) & 0xFFFF));
+        numObj++;
+        payload->setNumObjects(numObj);
     }
 
     // Realistic packet size: base header + per-object data
