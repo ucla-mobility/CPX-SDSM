@@ -91,6 +91,31 @@ Each **TraCI step (0.1 s)** SUMO advances vehicles; Veins syncs OMNeT++ `Car` mo
 | `useVoiObjectSelection` | false | Legacy VoI object ranking (v1 hybrid path) |
 | `rosBridgeMode` | `"off"` | **`"off"`** / `"log"` / `"live"` |
 
+### `trust_sdsm_v2` — imperfection injection (NED defaults; all off unless set)
+
+Used by the `trust_*` configs in `simulations/omnetpp_trust.ini`. With every value at its default the data is the original clean ground truth.
+
+| Parameter | Default | Role |
+|-----------|---------|------|
+| `positionNoiseStdDev` | **0 m** | Gaussian jitter (σ) on each reported object position; applied to the serialized report only, never the stored ground truth |
+| `attackerFraction` | **0.0** | Fraction of vehicles that lie; deterministic (`nodeIndex % round(1/fraction) == 0`) |
+| `attackType` | `"phantom"` | **`"phantom"`** fabricates an extra object (id `900000+nodeIndex`) at a fixed offset; **`"spoof"`** teleports one locked-on real neighbor by `spoofJumpDistance` |
+| `spoofJumpDistance` | **150 m** | Teleport distance for `attackType="spoof"` |
+| `attackerPureMode` | false | Attacker sends **only** its lie (no honest objects), so mixed-in honest traffic cannot inflate its reputation |
+
+### `trust_sdsm_v2` — engine constants (`sdsm_trust_perception`)
+
+| Constant | Value | Role |
+|----------|-------|------|
+| `REPUTATION_DEFAULT` | **0.5** | Starting reputation for every sender; decay baseline |
+| `DELTA` | **0.10** | Max reputation change per frame: `R_new = R_old + DELTA·S_frame`, `S_frame = (C−I)/N_total` |
+| `DECAY_RATE` | **0.003** | Drift toward baseline per frame with nothing to score |
+| `TAU_MIN` / `TAU_MAX` / `GAMMA` | **0.30** / **0.90** / **2.0** | Dynamic gate: `τ(R) = 0.90 − 0.60·R²` |
+| `HIGH_TRUST` | **0.95** | At/above this, all of a sender's objects are admitted; below, only corroborated ones |
+| `SUPPORT_THRESHOLD_THETA` | **1.0** | Reputation mass needed to corroborate a report |
+| `T_DEADLINE_S` | **15 s** | Grace window before an uncorroborated report is back-charged |
+| `flush_interval_s` | **0.5 s** | Verdict bucket width (launch parameter) |
+
 ### Greedy / hybrid v1 utility (NED + `[General]` in `omnetpp.ini`)
 
 | Parameter | Default (NED) | Typical `[General]` |
@@ -177,6 +202,45 @@ Scheduler logic is **ETSI TS 103 324 / TS 102 687–inspired**, not a conformanc
 
 `Greedy`, `EventTriggered`, `GreedyBSMImplied`, `HybridSDSM` (`hybridVariant="v1"`) remain in `simulations/omnetpp.ini` for reproducibility. They use the older weighted-sum / v1 hybrid paths. Prefer v2 configs for new results.
 
+### Trust layer (`trust_sdsm_v2`, receiver-side)
+
+Unlike the three policies above, this is **not** a dissemination policy: it changes nothing about *what* or *when* a vehicle sends. It is a **receiver-side judge** that decides which senders' SDSMs to believe. Each scenario extends `Periodic` (10 Hz, n10 density) so the radio side is identical, and only the data quality differs.
+
+| Config (`omnetpp_trust.ini`) | Data quality | What it tests |
+|------------------------------|--------------|---------------|
+| **`trust_clean_n10`** | Clean ground truth | Control: honest senders should stay trusted |
+| **`trust_noise_n10`** | `positionNoiseStdDev = 0.5 m` on every report | Honest-but-imperfect sensors should not be rejected |
+| **`trust_phantom_n10`** | 20 % of vehicles fabricate a fake object | Uncorroborated fabrication should be caught |
+| **`trust_spoof_n10`** | 20 % of vehicles teleport a real neighbor's position by 150 m | Kinematically impossible jumps should be caught |
+
+`attackerPureMode` (a command-line/ini override, not a named config) additionally strips an attacker's honest traffic so its reputation reflects only the lie.
+
+| Stage (per judging vehicle, per 0.5 s flush) | What it does |
+|----------------------------------------------|--------------|
+| **Gate** | `R_eff` vs the dynamic threshold `τ(R)`; a failing sender's data is withheld but it keeps being scored so it can recover |
+| **Kinematic check** | Flags a tracked object whose reported position jumps implausibly from its prior track |
+| **Match** | A sender's report is *matched* when it agrees with the judge's own view of the same `object_id`; otherwise it is `other_only` |
+| **Corroboration** | Only the judge's own direct match can corroborate. **No** sender may vouch for itself |
+| **Deferred ledger** | Uncorroborated reports are held for `T_DEADLINE_S`, then back-charged as incorrect (back-paid as correct if corroborated in time) |
+| **Reputation** | `R_new = R_old + 0.10·(C−I)/N_total`; every sender starts at 0.5, below the gate's fixed point (~0.648), so new senders start gate-failed by design |
+
+**Validation (10 vehicles, single seed, isolated reputation DBs):**
+
+| Scenario | Attacker avg final reputation | Honest avg final reputation | Attacker untrusted rate | Honest untrusted rate |
+|----------|------------------------------|-----------------------------|-------------------------|-----------------------|
+| Phantom (mixed) | 0.633 | 0.808 | 82.3 % | 58.5 % |
+| Spoof (mixed) | 0.628 | 0.807 | 82.3 % | 59.2 % |
+| Pure phantom | 0.500 | 0.775 | 100.0 % | 63.2 % |
+| Pure spoof | 0.600 | 0.800 | 86.5 % | 60.3 % |
+
+The clean separation of attackers from honest senders depends on a corroboration fix: an earlier version let a sender's own reputation satisfy its own corroboration requirement, so a well-reputed liar vouched for itself and was never caught. The honest untrusted rate (~60 %) is largely the cold-start tax (every sender begins below the gate), not evidence of misjudgment.
+
+**Factor isolation**
+
+- **`trust_clean_n10` vs `trust_noise_n10`:** isolates the cost of *honest sensor error*.
+- **`trust_clean_n10` vs `trust_phantom_n10` / `trust_spoof_n10`:** isolates the effect of a *deliberately untrustworthy sender*.
+- Radio metrics (PDR, AoI) are unchanged by the trust layer; `analysis/compute_trusted_pdr.py` reports PDR restricted to messages the judge trusted.
+
 ---
 
 ## SDSM payload (J3224-aligned)
@@ -221,6 +285,8 @@ Includes `avg_latency` / `p95_latency` from **`simTime − BSM envelope timestam
 | `analysis/compute_pdr.py` | Distance-binned PDR |
 | `analysis/compute_redundancy.py` | Object-level redundancy (v2 + object-AoI) |
 | `analysis/scale_by_distance.py` | Auxiliary scaling / distance analysis helper |
+| `analysis/replay_trust_verdicts.py` | `trust_sdsm_v2`: offline replay of a `*-ros-events.jsonl` through the trust engine → `*-trust-verdicts.csv` |
+| `analysis/compute_trusted_pdr.py` | `trust_sdsm_v2`: raw vs trusted PDR per distance bin (joins `*-rx.csv` with verdicts) |
 
 ---
 
@@ -232,6 +298,9 @@ Includes `avg_latency` / `p95_latency` from **`simTime − BSM envelope timestam
 4. **ETSI-inspired** scheduler/suppressor — not a standards compliance claim.
 5. **`num_vehicles`** may be **< requested N**; always use metadata for fair normalization.
 6. **Single-scenario / seed** until you publish multi-seed CIs.
+7. **`trust_sdsm_v2` has no Layer 1.** Local per-object confidence is hardcoded to `1.0`; there is no simulated sensor model, so the judge rests on cross-agent checks only.
+8. **`trust_sdsm_v2` has no peer-witness corroboration.** Matching is by reported `object_id` against the judge's own view, not CPX-Mono's multi-sender spatial clustering (`mmcooper_fuse`), so a third vehicle cannot back up an honest report.
+9. **Trust results are 10-vehicle, single-seed**, and not bit-reproducible across SUMO versions (1.12 vs 1.18 gave different traffic).
 
 ---
 
@@ -245,6 +314,7 @@ Includes `avg_latency` / `p95_latency` from **`simTime − BSM envelope timestam
 - **T. Thandavarayan et al., JNCA 2023** — LARM (redundancy gate inspiration).
 - **X. Lyu et al., IEEE VNC 2025** — VoI-style object ranking.
 - **C. Sommer et al.** — adaptive beaconing / self-change literature (v1 Greedy lineage).
+- **CPX-Mono `global_trust_perception`** — reputation, dynamic gate, deferred ledger (`trust_sdsm_v2`); reference copies in `reference/cpx_mono_trust/`.
 
 ROS message alignment: [ucla-mobility/CPX-SDSM](https://github.com/ucla-mobility/CPX-SDSM).
 
@@ -281,6 +351,24 @@ python3 run_experiments.py --algorithm Greedy --sim-duration 90
 python3 run_experiments.py --algorithm HybridSDSM --sim-duration 90
 ```
 
+### Trust layer scenarios (`trust_sdsm_v2`)
+
+```bash
+cd simulations
+../src/veins_ros_v2v_ucla omnetpp_trust.ini -c trust_phantom_n10 -r 0 -u Cmdenv \
+    -n "<your NED path, same as run_experiments.py uses>" --sim-time-limit=40s
+# writes results/trust_phantom_n10-r0-ros-events.jsonl
+
+# offline judgment (needs the built ros2_ws overlay sourced)
+cd ..
+python3 analysis/replay_trust_verdicts.py simulations/results/trust_phantom_n10-r0-ros-events.jsonl \
+    --db-dir results/trust_dbs/phantom --out simulations/results/trust_phantom_n10-trust-verdicts.csv
+```
+
+`analysis/compute_trusted_pdr.py` then joins the `*-rx.csv` with the verdicts CSV (see its `--help`).
+
+Use a **fresh `--db-dir` per run**: reputation persists in SQLite, so reusing a directory carries state between supposedly independent runs.
+
 ### Shrink huge RX CSV (optional)
 
 ```bash
@@ -302,7 +390,9 @@ Enable with `rosBridgeMode = "live"` in `omnetpp.ini` when needed.
 structured `sdsm_trust_interfaces/ReceivedSdsm` and publishes it on
 `/veins/sdsm_events` (the raw text still goes to `/veins/rx_raw` too).
 
-### SDSM trust layer (optional second-layer check)
+### SDSM trust layer (`trust_sdsm_v2`, optional second-layer check)
+
+Algorithm description, scenarios and validation results: see **Algorithms → Trust layer (`trust_sdsm_v2`)** above. This section covers running it live over ROS 2.
 
 `sdsm_trust_perception` is an independent per-vehicle trust judge — reputation,
 kinematic-plausibility and size-agreement checks, peer corroboration, a

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic Threshold</title>
+<link rel="stylesheet" href="viz.css">
+<script src="viz.js"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0; padding:2rem 1.25rem; background:var(--bg); color:var(--text-primary);
+    font-family:Cambria, Georgia, "Times New Roman", serif; line-height:1.6;}
+  .wrap{max-width:693px; margin:0 auto;}
+  h1{font-size:22px; font-weight:500; margin:0 0 1.25rem;}
+  button.scn{flex:1; min-width:130px; padding:9px 12px; font-size:14px; font-family:inherit;
+    background:transparent; color:var(--text-primary); border:1px solid var(--border-strong);
+    border-radius:var(--radius); cursor:pointer;}
+  button.scn:hover{background:var(--surface-1);}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:2px;
+    background:var(--border-strong); outline:none;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none; width:18px; height:18px;
+    border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  input[type=range]::-moz-range-thumb{width:18px; height:18px; border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  .legend{display:flex; gap:16px; margin-bottom:.75rem; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);}
+  .legend span{display:flex; align-items:center; gap:6px;}
+  .stat{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem;}
+  .stat .lbl{font-size:13px; color:var(--text-secondary);}
+  .stat .val{font-size:22px; font-weight:500;}
+  .doc{margin-top:2.5rem; border-top:1px solid var(--border); padding-top:1.5rem;}
+  .doc h2{font-size:18px; font-weight:600; margin:0 0 1rem;}
+  .doc h3{font-size:15px; font-weight:600; margin:1.75rem 0 .5rem;}
+  .doc p{font-size:14px; color:var(--text-secondary); margin:.4rem 0;}
+  .doc .eq{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem; margin:.5rem 0; overflow-x:auto;}
+  .doc table{width:100%; border-collapse:collapse; font-size:13px; margin-top:.5rem;}
+  .doc th,.doc td{text-align:left; padding:.5rem .6rem; border-bottom:1px solid var(--border); vertical-align:top;}
+  .doc th{color:var(--text-secondary); font-weight:600;}
+  .doc td:first-child{white-space:nowrap;}
+  .doc td:nth-child(2){color:var(--text-primary); font-weight:500; white-space:nowrap;}
+  .doc td:nth-child(3){color:var(--text-secondary);}
+</style>
+<script>
+  window.MathJax = { tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] } };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js" async></script>
+</head>
+<body>
+<div class="wrap">
+<h1>Dynamic Threshold</h1>
+
+<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:1rem;" id="tau-scenarios">
+  <button data-s="lenient" class="scn">Lenient γ=0.5</button>
+  <button data-s="linear" class="scn">Linear γ=1</button>
+  <button data-s="default" class="scn">Default γ=2</button>
+  <button data-s="strict" class="scn">Strict γ=3</button>
+</div>
+
+<div class="legend">
+  <span><span style="width:16px; height:3px; background:var(--amber); display:inline-block;"></span>τ(R) threshold</span>
+  <span><span style="width:16px; height:3px; background:var(--blue); display:inline-block;"></span>R = R (identity)</span>
+  <span><span style="width:20px; height:10px; background:rgba(0,114,178,0.12); display:inline-block; border-radius:2px;"></span>trusted zone R ≥ τ</span>
+</div>
+
+<div class="chart-box" style="position:relative; height:320px; margin-bottom:.5rem;"><canvas id="tau-chart" style="width:100%; height:100%;"></canvas></div>
+
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:1.25rem;">
+  <div class="stat"><div class="lbl">R* (fixed point)</div><div class="val" id="tau-stat-rstar">&mdash;</div></div>
+  <div class="stat"><div class="lbl">τ at R=0.5 (neutral)</div><div class="val" id="tau-stat-mid">&mdash;</div></div>
+  <div class="stat"><div class="lbl">τ at R=0.9 (good)</div><div class="val" id="tau-stat-good">&mdash;</div></div>
+  <div class="stat"><div class="lbl">τ at R=0 (stranger)</div><div class="val" id="tau-stat-zero">&mdash;</div></div>
+</div>
+
+<div id="tau-controls" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px 20px; margin-bottom:2rem;"></div>
+
+<section class="doc">
+  <h2>Dynamic threshold</h2>
+  <p>The gate admits an agent when \(R_{\text{eff}} \geq \tau(R_{\text{eff}})\). Because \(\tau\) is strictly decreasing in R, this is equivalent to \(R_{\text{eff}} \geq R^*\), the unique fixed point where the curves cross.</p>
+  <div class="eq">\[ \tau(R) = \tau_{\min} + (\tau_{\max} - \tau_{\min})(1 - R^{\gamma}) \]</div>
+  <p>\(\gamma &gt; 1\) bends the curve so that low-reputation agents face a disproportionately high bar. \(\gamma = 1\) is a straight line. \(\gamma &lt; 1\) is lenient at the bottom.</p>
+  <h3>Every variable</h3>
+  <table>
+    <thead><tr><th>Symbol</th><th>Name</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td>\(\tau_{\min}\)</td><td>threshold floor</td><td>The threshold even a perfectly reputable agent must clear (default 0.30). Prevents trust inflation</td></tr>
+      <tr><td>\(\tau_{\max}\)</td><td>threshold ceiling</td><td>The threshold for a zero-reputation stranger (default 0.90). Sets how hard it is to get in from cold</td></tr>
+      <tr><td>\(\gamma\)</td><td>strictness exponent</td><td>Curve shape. \(&gt;1\) = strict on low-R agents, lenient once trusted. \(=1\) = linear. \(&lt;1\) = lenient throughout</td></tr>
+      <tr><td>\(R^*\)</td><td>fixed point</td><td>The crossover where \(R = \tau(R)\): the minimum reputation to pass the gate (found by bisection)</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</div><!-- .wrap -->
+
+<script>
+(function(){
+  var PT={
+    tau_min:{v:0.30, min:0.05, max:0.6, step:0.01, label:"τ_min",
+      fmt:function(v){return v.toFixed(2);}},
+    tau_max:{v:0.90, min:0.5, max:1.0, step:0.01, label:"τ_max",
+      fmt:function(v){return v.toFixed(2);}},
+    gamma:{v:2.0, min:0.2, max:5.0, step:0.1, label:"γ  (strictness exponent)",
+      fmt:function(v){return v.toFixed(1);}}
+  };
+  var TAU_SCENARIOS={lenient:{gamma:0.5},linear:{gamma:1},default:{gamma:2},strict:{gamma:3}};
+  var tauScn="default";
+
+  function cssT(n,fb){try{var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();return v||fb;}catch(e){return fb;}}
+  function fmtT(k){var p=PT[k];return p.fmt?p.fmt(p.v):(p.step<1?p.v.toFixed(2):String(Math.round(p.v)));}
+
+  function tau(R){
+    var mn=PT.tau_min.v, mx=PT.tau_max.v, g=PT.gamma.v;
+    return mn+(mx-mn)*(1-Math.pow(R,g));
+  }
+  function computeRStar(){
+    var lo=0, hi=1;
+    for(var i=0;i<60;i++){var m=(lo+hi)/2; if(m>=tau(m)) hi=m; else lo=m;}
+    return (lo+hi)/2;
+  }
+
+  var tvc=document.getElementById("tau-chart");
+
+  function drawTau(){
+    try{
+      var rs=computeRStar();
+      document.getElementById("tau-stat-rstar").textContent=rs.toFixed(4);
+      document.getElementById("tau-stat-mid").textContent=tau(0.5).toFixed(4);
+      document.getElementById("tau-stat-good").textContent=tau(0.9).toFixed(4);
+      document.getElementById("tau-stat-zero").textContent=tau(0).toFixed(4);
+
+      var cT=cssT('--text-primary','#1a1a1a'), cM=cssT('--text-muted','#767676');
+      var cB=cssT('--border','rgba(0,0,0,0.12)');
+      var amber=cssT('--amber','#d55e00'), blue=cssT('--blue','#0072b2');
+      var FG=vizFigure();
+
+      var dpr=window.devicePixelRatio||1, rect=tvc.getBoundingClientRect(), w=rect.width||600, h=rect.height||320;
+      tvc.width=w*dpr; tvc.height=h*dpr;
+      var ctx=tvc.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+
+      var padL=54+FG.padLBoost, padR=12, padT=14, padB=40+FG.padBBoost;
+      var X=function(r){return padL+(w-padL-padR)*r;};
+      var Y=function(v){return padT+(h-padT-padB)*(1-v);};
+
+      ctx.fillStyle=blue; ctx.globalAlpha=0.08;
+      var px_rs=X(rs);
+      ctx.fillRect(px_rs,padT,w-padR-px_rs,h-padT-padB);
+      ctx.globalAlpha=1;
+
+      ctx.strokeStyle=cB; ctx.fillStyle=cM; ctx.font=FG.tickFont; ctx.lineWidth=FG.grid;
+      [0,0.25,0.5,0.75,1].forEach(function(g){
+        ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(padL,Y(g)); ctx.lineTo(w-padR,Y(g)); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.textAlign='right'; ctx.fillText(g.toFixed(2),padL-6,Y(g)+3);
+        var px=X(g);
+        ctx.strokeStyle=cB; ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(px,padT); ctx.lineTo(px,h-padB); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.fillStyle=cM; ctx.textAlign=(g===0?"left":(g===1?"right":"center"));
+        ctx.fillText(g.toFixed(2),px,h-padB+14);
+        ctx.fillStyle=cM;
+      });
+      ctx.textAlign="left";
+
+      ctx.strokeStyle=blue; ctx.lineWidth=FG.thin; ctx.beginPath();
+      ctx.moveTo(X(0),Y(0)); ctx.lineTo(X(1),Y(1)); ctx.stroke();
+
+      ctx.strokeStyle=amber; ctx.lineWidth=FG.series; ctx.beginPath();
+      for(var i=0;i<=300;i++){
+        var r_i=i/300, t_i=tau(r_i);
+        if(i===0) ctx.moveTo(X(r_i),Y(t_i)); else ctx.lineTo(X(r_i),Y(t_i));
+      }
+      ctx.stroke();
+
+      ctx.fillStyle=amber;
+      ctx.beginPath(); ctx.arc(X(rs),Y(rs),6,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle=cT; ctx.font=FG.tickFont;
+      ctx.fillText("R*="+rs.toFixed(3),X(rs)+9,Y(rs)-5);
+
+      ctx.fillStyle=cT; ctx.font=FG.axisFont; ctx.textAlign="center";
+      ctx.fillText("Reputation (R)", (padL+(w-padR))/2, h-6);
+      vizYTitle(ctx, "Acceptance Threshold (τ)", FG.axisPad, h);
+      ctx.textAlign="left";
+    }catch(e){}
+  }
+
+  var tctrl=document.getElementById("tau-controls");
+  var tInps={}, tOuts={};
+  Object.keys(PT).forEach(function(key){
+    var p=PT[key], wrap=document.createElement("div");
+    var head=document.createElement("div");
+    head.style.cssText="display:flex; justify-content:space-between; font-size:13px; color:var(--text-secondary); margin-bottom:4px;";
+    var lab=document.createElement("span"); lab.textContent=p.label;
+    var out=document.createElement("span"); out.style.cssText="font-weight:500; color:var(--text-primary);"; out.textContent=fmtT(key);
+    tOuts[key]=out;
+    head.appendChild(lab); head.appendChild(out); wrap.appendChild(head);
+    var inp=document.createElement("input"); inp.type="range";
+    inp.min=p.min; inp.max=p.max; inp.step=p.step; inp.value=p.v;
+    tInps[key]=inp;
+    inp.addEventListener("input",function(){p.v=parseFloat(inp.value); out.textContent=fmtT(key); drawTau();});
+    wrap.appendChild(inp); tctrl.appendChild(wrap);
+  });
+
+  function setActiveTau(btn){
+    var all=document.querySelectorAll("#tau-scenarios .scn");
+    for(var i=0;i<all.length;i++){all[i].style.background="transparent"; all[i].style.borderColor="var(--border-strong)"; all[i].style.color="var(--text-primary)";}
+    btn.style.background="var(--bg-accent)"; btn.style.borderColor="var(--border-accent)"; btn.style.color="var(--text-accent)";
+  }
+  var tbtns=document.querySelectorAll("#tau-scenarios .scn");
+  for(var i=0;i<tbtns.length;i++){(function(btn){
+    btn.addEventListener("click",function(){
+      tauScn=btn.dataset.s;
+      PT.gamma.v=TAU_SCENARIOS[tauScn].gamma;
+      tInps.gamma.value=PT.gamma.v;
+      tOuts.gamma.textContent=fmtT("gamma");
+      setActiveTau(btn); drawTau();
+    });
+  })(tbtns[i]);}
+  for(var i=0;i<tbtns.length;i++){if(tbtns[i].dataset.s==="default"){setActiveTau(tbtns[i]);break;}}
+
+  window.addEventListener("resize", drawTau);
+  setTimeout(drawTau, 0);
+})();
+</script>
+
+</body>
+</html>

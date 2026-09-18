@@ -1,0 +1,4 @@
+uint8 agent_id
+float32 local_score
+---
+float32 weighted_score

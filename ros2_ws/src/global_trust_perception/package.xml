@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>global_trust_perception</name>
+  <version>0.0.0</version>
+  <description>Trustworthy cooperative perception: reputation-based trust scoring for V2X agents using SORT tracking, MS-PSF rotated-BEV fusion, and dynamic thresholding.</description>
+  <maintainer email="alinka.markova@gmail.com">Alex Markova</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <!-- NEW -->
+  <depend>j3224_v2x_msgs</depend>
+  <depend>j2735_v2x_msgs</depend>
+  <depend>sdsm_interfaces</depend>
+  <depend>global_trust_tracker</depend>
+  <depend>foxglove_msgs</depend>  <!-- viz: scene_node publishes SceneUpdate -->
+  <depend>visualization_msgs</depend>  <!-- viz: trust_view_node publishes MarkerArray -->
+  <depend>geometry_msgs</depend>
+  <depend>python3-numpy</depend>
+  <depend>python3-scipy</depend>
+  <depend>python3-shapely</depend>
+  <!-- filterpy has no apt package; install via: pip3 install filterpy -->
+
+  <exec_depend>ros2launch</exec_depend>  <!-- intersection_sim.launch.py -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_mypy</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>ament_xmllint</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

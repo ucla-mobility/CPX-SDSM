@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reputation Update</title>
+<link rel="stylesheet" href="viz.css">
+<script src="viz.js"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0; padding:2rem 1.25rem; background:var(--bg); color:var(--text-primary);
+    font-family:Cambria, Georgia, "Times New Roman", serif; line-height:1.6;}
+  .wrap{max-width:693px; margin:0 auto;}
+  h1{font-size:22px; font-weight:500; margin:0 0 1.25rem;}
+  button.scn{flex:1; min-width:130px; padding:9px 12px; font-size:14px; font-family:inherit;
+    background:transparent; color:var(--text-primary); border:1px solid var(--border-strong);
+    border-radius:var(--radius); cursor:pointer;}
+  button.scn:hover{background:var(--surface-1);}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:2px;
+    background:var(--border-strong); outline:none;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none; width:18px; height:18px;
+    border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  input[type=range]::-moz-range-thumb{width:18px; height:18px; border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  .legend{display:flex; gap:16px; margin-bottom:.75rem; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);}
+  .legend span{display:flex; align-items:center; gap:6px;}
+  .stat{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem;}
+  .stat .lbl{font-size:13px; color:var(--text-secondary);}
+  .stat .val{font-size:22px; font-weight:500;}
+  .doc{margin-top:2.5rem; border-top:1px solid var(--border); padding-top:1.5rem;}
+  .doc h2{font-size:18px; font-weight:600; margin:0 0 1rem;}
+  .doc h3{font-size:15px; font-weight:600; margin:1.75rem 0 .5rem;}
+  .doc p{font-size:14px; color:var(--text-secondary); margin:.4rem 0;}
+  .doc .eq{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem; margin:.5rem 0; overflow-x:auto;}
+  .doc table{width:100%; border-collapse:collapse; font-size:13px; margin-top:.5rem;}
+  .doc th,.doc td{text-align:left; padding:.5rem .6rem; border-bottom:1px solid var(--border); vertical-align:top;}
+  .doc th{color:var(--text-secondary); font-weight:600;}
+  .doc td:first-child{white-space:nowrap;}
+  .doc td:nth-child(2){color:var(--text-primary); font-weight:500; white-space:nowrap;}
+  .doc td:nth-child(3){color:var(--text-secondary);}
+</style>
+<script>
+  window.MathJax = { tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] } };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js" async></script>
+</head>
+<body>
+<div class="wrap">
+<h1>Reputation Update</h1>
+
+<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:1rem;" id="rep-scenarios">
+  <button data-s="good" class="scn">Steady good</button>
+  <button data-s="onoff" class="scn">On-off attacker</button>
+  <button data-s="silent" class="scn">Silent (decay)</button>
+  <button data-s="decline" class="scn">Slow decline</button>
+  <button data-s="recovery" class="scn">Recovery</button>
+</div>
+
+<div class="legend">
+  <span><span style="width:16px; height:3px; background:var(--amber); display:inline-block;"></span>R (reputation)</span>
+  <span><span style="width:16px; height:0; border-top:2px dashed var(--blue);"></span>R* (gate crossover)</span>
+  <span><span style="width:20px; height:10px; background:rgba(0,114,178,0.10); display:inline-block; border-radius:2px;"></span>trusted zone</span>
+</div>
+
+<div class="chart-box" style="position:relative; height:320px; margin-bottom:.5rem;"><canvas id="rep-chart" style="width:100%; height:100%;"></canvas></div>
+
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:1.25rem;">
+  <div class="stat"><div class="lbl">final R</div><div class="val" id="rep-stat-final">&mdash;</div></div>
+  <div class="stat"><div class="lbl">first frame ≥ R*</div><div class="val" id="rep-stat-cross">&mdash;</div></div>
+  <div class="stat"><div class="lbl">frames trusted</div><div class="val" id="rep-stat-trusted">&mdash;</div></div>
+  <div class="stat"><div class="lbl">R* crossover</div><div class="val" id="rep-stat-rstar">&mdash;</div></div>
+</div>
+
+<div id="rep-controls" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px 20px; margin-bottom:2rem;"></div>
+
+<section class="doc">
+  <h2>Reputation update</h2>
+  <p>Each frame with data produces a score \(S \in [-1,1]\) based on correct vs incorrect observations, and reputation moves by \(\delta \cdot S\).</p>
+  <div class="eq">\[ S_t = \frac{C - I}{N},\qquad R_{t+1} = \operatorname{clip}(R_t + \delta \cdot S_t,\ 0,\ 1) \]</div>
+  <p>When the agent sends nothing (\(N=0\)), reputation drifts toward baseline rather than freezing — preventing stale reputations from persisting indefinitely:</p>
+  <div class="eq">\[ R_{t+1} = R_t + \lambda({\text{baseline}} - R_t) \quad \text{(empty frame)} \]</div>
+  <h3>Every variable</h3>
+  <table>
+    <thead><tr><th>Symbol</th><th>Name</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td>\(C,\,I\)</td><td>correct / incorrect</td><td>Counts of observations the neighbour got right vs wrong this frame</td></tr>
+      <tr><td>\(N\)</td><td>total observations</td><td>C + I (or more); normalises S to [-1,1]</td></tr>
+      <tr><td>\(S_t\)</td><td>frame score</td><td>Net correctness fraction this frame; +1 = perfect, -1 = all wrong</td></tr>
+      <tr><td>\(\delta\)</td><td>step size</td><td>How much R moves per frame (default 0.10). Larger = faster trust building and destruction</td></tr>
+      <tr><td>\(\lambda\)</td><td>decay rate</td><td>Drift-toward-baseline rate on empty frames (default 0.003 per frame)</td></tr>
+      <tr><td>baseline</td><td>neutral R</td><td>The value empty-frame decay aims at (default 0.5)</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</div><!-- .wrap -->
+
+<script>
+(function(){
+  var DELTA_DEF=0.10, DECAY_DEF=0.003, BASELINE=0.5;
+  var TAU_MIN=0.30, TAU_MAX=0.90, GAMMA=2.0;
+
+  var PR={
+    delta:{v:DELTA_DEF, min:0.01, max:0.30, step:0.01, label:"δ  (step size)",
+      fmt:function(v){return v.toFixed(2);}},
+    decay:{v:DECAY_DEF, min:0, max:0.02, step:0.001, label:"λ  (empty-frame decay)",
+      fmt:function(v){return v.toFixed(3);}},
+    frames:{v:200, min:20, max:600, step:10, label:"frames to simulate",
+      fmt:function(v){return Math.round(v)+" fr";}}
+  };
+
+  var REP_SCENARIOS={
+    good:{fn:function(t,N){return {c:N,i:0,n:N};}},
+    onoff:{fn:function(t,N){var per=Math.max(2,Math.round(0.1*N)); var phase=t%per; return phase<per/2?{c:N,i:0,n:N}:{c:0,i:N,n:N};}},
+    silent:{fn:function(t,N){return {c:0,i:0,n:0};}},
+    decline:{fn:function(t,N){return {c:Math.round(0.35*N),i:Math.round(0.65*N),n:N};}},
+    recovery:{fn:function(t,N){return t<Math.round(0.4*N)?{c:0,i:N,n:N}:{c:N,i:0,n:N};}}
+  };
+  var repScn="good";
+
+  function cssR(n,fb){try{var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();return v||fb;}catch(e){return fb;}}
+  function fmtR(k){var p=PR[k];return p.fmt?p.fmt(p.v):(p.step<1?p.v.toFixed(2):String(Math.round(p.v)));}
+
+  function tauR(R){return TAU_MIN+(TAU_MAX-TAU_MIN)*(1-R*R);}
+  function rStarR(){var lo=0,hi=1; for(var i=0;i<60;i++){var m=(lo+hi)/2; if(m>=tauR(m))hi=m;else lo=m;} return(lo+hi)/2;}
+
+  function simulate(){
+    var N=Math.round(PR.frames.v), d=PR.delta.v, lam=PR.decay.v;
+    var scnFn=REP_SCENARIOS[repScn].fn;
+    var R=new Array(N); R[0]=BASELINE;
+    for(var t=1;t<N;t++){
+      var obs=scnFn(t,10), rold=R[t-1];
+      if(obs.n===0){
+        R[t]=Math.min(1,Math.max(0,rold+lam*(BASELINE-rold)));
+      } else {
+        var s=(obs.c-obs.i)/obs.n;
+        R[t]=Math.min(1,Math.max(0,rold+d*s));
+      }
+    }
+    return R;
+  }
+
+  var rvc=document.getElementById("rep-chart");
+
+  function drawRep(){
+    try{
+      var R=simulate(), N=R.length, rs=rStarR();
+      var firstCross=-1, trusted=0;
+      for(var t=0;t<N;t++){if(R[t]>=rs){if(firstCross<0)firstCross=t; trusted++;}}
+
+      document.getElementById("rep-stat-final").textContent=R[N-1].toFixed(3);
+      document.getElementById("rep-stat-cross").textContent=firstCross<0?"never":("frame "+firstCross);
+      document.getElementById("rep-stat-trusted").textContent=trusted+" / "+N;
+      document.getElementById("rep-stat-rstar").textContent=rs.toFixed(4);
+
+      var cT=cssR('--text-primary','#1a1a1a'), cM=cssR('--text-muted','#767676');
+      var cB=cssR('--border','rgba(0,0,0,0.12)');
+      var amber=cssR('--amber','#d55e00'), blue=cssR('--blue','#0072b2');
+      var FG=vizFigure();
+
+      var dpr=window.devicePixelRatio||1, rect=rvc.getBoundingClientRect(), w=rect.width||600, h=rect.height||320;
+      rvc.width=w*dpr; rvc.height=h*dpr;
+      var ctx=rvc.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+
+      var padL=54+FG.padLBoost, padR=12, padT=14, padB=40+FG.padBBoost;
+      var X=function(i){return padL+(w-padL-padR)*i/(N-1);};
+      var Y=function(v){return padT+(h-padT-padB)*(1-v);};
+
+      ctx.fillStyle=blue; ctx.globalAlpha=0.07;
+      ctx.fillRect(padL,Y(1),w-padR-padL,Y(rs)-Y(1));
+      ctx.globalAlpha=1;
+
+      ctx.strokeStyle=cB; ctx.fillStyle=cM; ctx.font=FG.tickFont; ctx.lineWidth=FG.grid;
+      [0,0.25,0.5,0.75,1].forEach(function(g){
+        ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(padL,Y(g)); ctx.lineTo(w-padR,Y(g)); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.textAlign='right'; ctx.fillText(g.toFixed(2),padL-6,Y(g)+3);
+      });
+      [0,0.25,0.5,0.75,1].forEach(function(fr){
+        var idx=Math.round(fr*(N-1)), px=X(idx);
+        ctx.strokeStyle=cB; ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(px,padT); ctx.lineTo(px,h-padB); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.fillStyle=cM; ctx.textAlign=(fr===0?'left':(fr===1?'right':'center'));
+        ctx.fillText(String(idx),px,h-padB+14);
+      });
+      ctx.textAlign="left";
+      ctx.fillStyle=cT; ctx.font=FG.axisFont; ctx.textAlign="center";
+      ctx.fillText('Frame', (padL+(w-padR))/2, h-6);
+      vizYTitle(ctx, 'Reputation (R)', FG.axisPad, h);
+      ctx.textAlign="left";
+
+      ctx.strokeStyle=blue; ctx.lineWidth=FG.thin; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(padL,Y(rs)); ctx.lineTo(w-padR,Y(rs)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle=blue; ctx.font=FG.smallFont;
+      ctx.fillText("R*",w-padR-20,Y(rs)-4);
+
+      ctx.strokeStyle=amber; ctx.lineWidth=FG.series; ctx.beginPath();
+      for(var i=0;i<N;i++){if(i===0)ctx.moveTo(X(i),Y(R[i]));else ctx.lineTo(X(i),Y(R[i]));}
+      ctx.stroke();
+    }catch(e){}
+  }
+
+  var rctrl=document.getElementById("rep-controls");
+  Object.keys(PR).forEach(function(key){
+    var p=PR[key], wrap=document.createElement("div");
+    var head=document.createElement("div");
+    head.style.cssText="display:flex; justify-content:space-between; font-size:13px; color:var(--text-secondary); margin-bottom:4px;";
+    var lab=document.createElement("span"); lab.textContent=p.label;
+    var out=document.createElement("span"); out.style.cssText="font-weight:500; color:var(--text-primary);"; out.textContent=fmtR(key);
+    head.appendChild(lab); head.appendChild(out); wrap.appendChild(head);
+    var inp=document.createElement("input"); inp.type="range";
+    inp.min=p.min; inp.max=p.max; inp.step=p.step; inp.value=p.v;
+    inp.addEventListener("input",function(){p.v=parseFloat(inp.value); out.textContent=fmtR(key); drawRep();});
+    wrap.appendChild(inp); rctrl.appendChild(wrap);
+  });
+
+  function setActiveRep(btn){
+    var all=document.querySelectorAll("#rep-scenarios .scn");
+    for(var i=0;i<all.length;i++){all[i].style.background="transparent"; all[i].style.borderColor="var(--border-strong)"; all[i].style.color="var(--text-primary)";}
+    btn.style.background="var(--bg-accent)"; btn.style.borderColor="var(--border-accent)"; btn.style.color="var(--text-accent)";
+  }
+  var rbtns=document.querySelectorAll("#rep-scenarios .scn");
+  for(var i=0;i<rbtns.length;i++){(function(btn){
+    btn.addEventListener("click",function(){repScn=btn.dataset.s; setActiveRep(btn); drawRep();});
+  })(rbtns[i]);}
+  setActiveRep(rbtns[0]);
+
+  window.addEventListener("resize", drawRep);
+  setTimeout(drawRep, 0);
+})();
+</script>
+
+</body>
+</html>

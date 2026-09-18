@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reputation History</title>
+<link rel="stylesheet" href="viz.css">
+<script src="viz.js"></script>
+<script src="reputation_history_data.js"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0; padding:2rem 1.25rem; background:var(--bg); color:var(--text-primary);
+    font-family:Cambria, Georgia, "Times New Roman", serif; line-height:1.6;}
+  .wrap{max-width:693px; margin:0 auto;}
+  h1{font-size:22px; font-weight:500; margin:0 0 1.25rem;}
+  .legend{display:flex; gap:16px; margin-bottom:.75rem; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);}
+  .legend span{display:flex; align-items:center; gap:6px;}
+  .stat{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem;}
+  .stat .lbl{font-size:13px; color:var(--text-secondary);}
+  .stat .val{font-size:22px; font-weight:500;}
+  .empty{padding:2.5rem 1rem; text-align:center; color:var(--text-secondary); font-size:14px;}
+  .doc{margin-top:2.5rem; border-top:1px solid var(--border); padding-top:1.5rem;}
+  .doc h2{font-size:18px; font-weight:600; margin:0 0 1rem;}
+  .doc p{font-size:14px; color:var(--text-secondary); margin:.4rem 0;}
+  .doc code{font-family:Menlo, Consolas, monospace; font-size:12.5px; background:var(--surface-1);
+    padding:.1rem .35rem; border-radius:4px;}
+  /* This page's chart only -- more square than viz.css's shared .chart-box
+     rules, which every other visualization page still uses unchanged. The
+     extra class keeps specificity above viz.css's .chart-box selectors so
+     this overrides cleanly in both modes. */
+  .chart-box.hist-square{height:560px;}
+  body.figure-mode .chart-box.hist-square{height:460px !important;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Agent 2 Reputation History</h1>
+
+<div class="legend">
+  <span><span style="width:16px; height:3px; background:var(--amber); display:inline-block;"></span>R (reputation, as judged by ego 1)</span>
+  <span><span style="width:16px; height:0; border-top:2px dashed var(--blue);"></span>R = 0.6 (threshold)</span>
+  <span><span style="width:20px; height:10px; background:rgba(0,114,178,0.10); display:inline-block; border-radius:2px;"></span>trusted zone</span>
+</div>
+
+<div class="chart-box hist-square" style="position:relative; margin-bottom:.5rem;"><canvas id="hist-chart" style="width:100%; height:100%;"></canvas></div>
+<div id="hist-empty" class="empty" style="display:none;">
+  (no reputation rows recorded yet -- run <code>make_reputation_history_viz.py</code> after a demo run)
+</div>
+
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:1.25rem;">
+  <div class="stat"><div class="lbl">final R</div><div class="val" id="hist-stat-final">&mdash;</div></div>
+  <div class="stat"><div class="lbl">first &ge; 0.6</div><div class="val" id="hist-stat-cross">&mdash;</div></div>
+  <div class="stat"><div class="lbl">samples trusted</div><div class="val" id="hist-stat-trusted">&mdash;</div></div>
+  <div class="stat"><div class="lbl">threshold</div><div class="val" id="hist-stat-rstar">&mdash;</div></div>
+</div>
+
+<section class="doc">
+  <h2>What this is</h2>
+  <p>The actual recorded reputation trajectory for agent 2 (the vehicle), as
+  judged by ego 1 (the infrastructure), read from ego 1's own
+  <code>historical_reputations_1.db</code> -- not a simulation. The trusted
+  zone is the current fixed gate threshold, R = 0.6, not the dynamic
+  \(\tau(R)\) formula <code>reputation_update.html</code> and
+  <code>dynamic_threshold.html</code> illustrate.</p>
+  <p>This page never touches the database itself: a companion script,
+  <code>scripts/make_reputation_history_viz.py</code>, reads it and writes
+  <code>reputation_history_data.js</code>, which this page loads as a plain
+  script tag so it still opens with no server, over <code>file://</code>. Rerun
+  the script after a demo run to refresh the chart -- reloading this page
+  alone will not.</p>
+</section>
+
+</div><!-- .wrap -->
+
+<script>
+(function(){
+  var R_THRESHOLD=0.6;
+
+  function cssR(n,fb){try{var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();return v||fb;}catch(e){return fb;}}
+
+  var data=window.REPUTATION_HISTORY||{t:[],r:[]};
+  var hvc=document.getElementById("hist-chart");
+
+  function drawHist(){
+    var T=data.t, R=data.r, N=R.length;
+    if(N===0){
+      hvc.style.display="none";
+      document.getElementById("hist-empty").style.display="block";
+      return;
+    }
+    try{
+      var rs=R_THRESHOLD;
+      var firstCross=-1, trusted=0;
+      for(var i=0;i<N;i++){if(R[i]>=rs){if(firstCross<0)firstCross=i; trusted++;}}
+
+      document.getElementById("hist-stat-final").textContent=R[N-1].toFixed(3);
+      document.getElementById("hist-stat-cross").textContent=firstCross<0?"never":(T[firstCross].toFixed(1)+" s");
+      document.getElementById("hist-stat-trusted").textContent=trusted+" / "+N;
+      document.getElementById("hist-stat-rstar").textContent=rs.toFixed(4);
+
+      var cT=cssR('--text-primary','#1a1a1a'), cM=cssR('--text-muted','#767676');
+      var cB=cssR('--border','rgba(0,0,0,0.12)');
+      var amber=cssR('--amber','#d55e00'), blue=cssR('--blue','#0072b2');
+      var FG=vizFigure();
+      // This page's chart only, same reasoning as .hist-square: doubles the
+      // shared vizFigure() font sizes locally rather than touching MODES in
+      // viz.js, which every other page's chart also reads.
+      function dbl(f){return f.replace(/(\d+(?:\.\d+)?)px/, function(_,n){return (parseFloat(n)*2)+'px';});}
+
+      var dpr=window.devicePixelRatio||1, rect=hvc.getBoundingClientRect(), w=rect.width||600, h=rect.height||320;
+      hvc.width=w*dpr; hvc.height=h*dpr;
+      var ctx=hvc.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+
+      // Both the tick numbers and the rotated y-title are doubled on this page
+      // (see dbl), so the left gutter is measured from the actual tick-label
+      // width plus the column the title needs to its left, not a fixed pad: a
+      // fixed one fit neither font -- too small clipped the title at the canvas
+      // edge, too large ran it into the tick numbers.
+      ctx.font=dbl(FG.tickFont);
+      var tickW=0;
+      [0,0.25,0.5,0.75,1].forEach(function(g){tickW=Math.max(tickW,ctx.measureText(g.toFixed(2)).width);});
+      var axisPx=parseFloat(dbl(FG.axisFont).match(/(\d+(?:\.\d+)?)px/)[1]);
+      var titleX=axisPx*0.8+6;                  // baseline clear of the edge by the glyph ascent
+      var padL=titleX+axisPx*0.22+10+tickW+6;   // title right | gap | tick numbers | gap to axis
+      var padR=12, padT=24, padB=40+FG.padBBoost+16;
+      var tMax=T[N-1]||1;
+      var X=function(i){return padL+(w-padL-padR)*(N>1?T[i]/tMax:0);};
+      var Y=function(v){return padT+(h-padT-padB)*(1-v);};
+
+      ctx.fillStyle=blue; ctx.globalAlpha=0.07;
+      ctx.fillRect(padL,Y(1),w-padR-padL,Y(rs)-Y(1));
+      ctx.globalAlpha=1;
+
+      ctx.strokeStyle=cB; ctx.fillStyle=cM; ctx.font=dbl(FG.tickFont); ctx.lineWidth=FG.grid;
+      [0,0.25,0.5,0.75,1].forEach(function(g){
+        ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(padL,Y(g)); ctx.lineTo(w-padR,Y(g)); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.textAlign='right'; ctx.fillText(g.toFixed(2),padL-6,Y(g)+3);
+      });
+      [0,0.25,0.5,0.75,1].forEach(function(fr){
+        var tv=fr*tMax, px=padL+(w-padL-padR)*fr;
+        ctx.strokeStyle=cB; ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(px,padT); ctx.lineTo(px,h-padB); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.fillStyle=cM; ctx.textAlign=(fr===0?'left':(fr===1?'right':'center'));
+        ctx.fillText(tv.toFixed(1),px,h-padB+14);
+      });
+      ctx.textAlign="left";
+      ctx.fillStyle=cT; ctx.font=dbl(FG.axisFont); ctx.textAlign="center";
+      ctx.fillText('Time (s)', (padL+(w-padR))/2, h-6);
+      // titleX (computed with padL) already clears the canvas edge and sits
+      // left of the tick numbers.
+      vizYTitle(ctx, 'Reputation (R)', titleX, h);
+      ctx.textAlign="left";
+
+      ctx.strokeStyle=blue; ctx.lineWidth=FG.thin; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(padL,Y(rs)); ctx.lineTo(w-padR,Y(rs)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle=blue; ctx.font=dbl(FG.smallFont); ctx.textAlign="right";
+      ctx.fillText("R = 0.6",w-padR,Y(rs)-4);
+      ctx.textAlign="left";
+
+      ctx.strokeStyle=amber; ctx.lineWidth=FG.series; ctx.beginPath();
+      for(var i=0;i<N;i++){if(i===0)ctx.moveTo(X(i),Y(R[i]));else ctx.lineTo(X(i),Y(R[i]));}
+      ctx.stroke();
+    }catch(e){}
+  }
+
+  window.addEventListener("resize", drawHist);
+  setTimeout(drawHist, 0);
+})();
+</script>
+
+</body>
+</html>

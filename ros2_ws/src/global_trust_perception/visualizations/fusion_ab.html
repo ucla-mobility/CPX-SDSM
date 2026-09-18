@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MS-PSF Speed Rewrites &mdash; Pipeline A/B</title>
+<link rel="stylesheet" href="viz.css">
+<script src="viz.js"></script>
+<script src="fusion_ab_data.js"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0; padding:2rem 1.25rem; background:var(--bg); color:var(--text-primary);
+    font-family:Cambria, Georgia, "Times New Roman", serif; line-height:1.6;}
+  .wrap{max-width:900px; margin:0 auto;}
+  h1{font-size:22px; font-weight:500; margin:0 0 .3rem;}
+  .sub{color:var(--text-secondary); font-size:14px; margin:0 0 1rem;}
+  .machines{display:flex; gap:14px; flex-wrap:wrap; margin:0 0 1.5rem; font-size:13px;}
+  .mcard{background:var(--surface-1); border-radius:var(--radius); padding:.5rem .8rem;}
+  .mcard .dot{display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:6px; vertical-align:middle;}
+  .mcard .nm{font-weight:600;}
+  .mcard .hw{color:var(--text-secondary); font-size:12.5px;}
+  h2{font-size:18px; font-weight:600; margin:2.2rem 0 .5rem;}
+  h3{font-size:15px; font-weight:600; margin:1.2rem 0 .3rem;}
+  .legend{display:flex; gap:18px; margin:.25rem 0 .5rem; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);}
+  .legend span{display:flex; align-items:center; gap:6px;}
+  .swatch{width:22px; height:0; display:inline-block;}
+  .panel-title{font-size:14px; font-weight:600; margin:.9rem 0 .2rem;}
+  .chart-box.ab{height:290px;}
+  body.figure-mode .chart-box.ab{height:330px !important;}
+  .tbl-scroll{overflow-x:auto; margin-bottom:.5rem;}
+  table{border-collapse:collapse; font-variant-numeric:tabular-nums; font-size:12.5px; min-width:100%;}
+  th,td{padding:.28rem .5rem; border-bottom:1px solid var(--border); white-space:nowrap;}
+  thead th{color:var(--text-secondary); text-align:right; border-bottom:2px solid var(--border-strong);}
+  th.stage,td.stage{text-align:left;}
+  td.num{text-align:right;}
+  th.grp{text-align:center; border-bottom:1px solid var(--border);}
+  th.grp.ref{color:var(--amber);} th.grp.mod{color:var(--blue);}
+  th.sep,td.sep{border-left:1px solid var(--border-strong);}
+  tbody tr.e2e td{font-weight:700;}
+  tbody tr.concurrent td.stage{color:var(--text-muted); font-style:italic;}
+  .caption{color:var(--text-secondary); font-size:13px; margin:.2rem 0 .6rem;}
+  .doc{margin-top:2.5rem; border-top:1px solid var(--border); padding-top:1.5rem;}
+  .doc h2{font-size:18px; margin:0 0 1rem;}
+  .doc p{font-size:14px; color:var(--text-secondary); margin:.5rem 0;}
+  .doc code{font-family:Menlo, Consolas, monospace; font-size:12.5px; background:var(--surface-1);
+    padding:.1rem .35rem; border-radius:4px;}
+  .empty{padding:2.5rem 1rem; text-align:center; color:var(--text-secondary); font-size:14px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>MS-PSF speed rewrites &mdash; whole-pipeline A/B</h1>
+<p class="sub" id="sub"></p>
+<div class="machines" id="machines"></div>
+
+<div id="content"></div>
+
+<div id="empty" class="empty" style="display:none;">
+  (no data &mdash; run <code>compare_stages.py --dumps *.json --viz-data fusion_ab_data.js</code>)
+</div>
+
+<section class="doc">
+  <h2>What this is</h2>
+  <p>End-to-end latency of the global trust pipeline (<code>flush_frame</code>),
+  timed with the MS-PSF <em>speed rewrites</em> on (<strong>modified</strong>,
+  shipped vectorized) versus off (<strong>reference</strong>, pre-optimization
+  Python loops); kds-orientation is present in both, so this isolates the speed
+  rewrites. "Matching" is the <code>MS-PSF phase-1 fusion</code> stage &mdash;
+  the clustering step is the matching. Charts sweep two ways: over agent count
+  (objects fixed) and over object count (agents fixed). Lines are colored by
+  machine and dashed by variant (solid = modified, dashed = reference). A line
+  is a fitted power-law curve (<code>a&middot;x<sup>b</sup></code>) when the stage
+  scales non-linearly; a series that scales about linearly just connects its
+  measured points.</p>
+  <p>Frames are synthetic (there is no multi-agent dataset):
+  <code>benchmark_stages.py</code> lays objects on a 15&nbsp;m grid, has every
+  agent and ego observe each with 0.2&nbsp;m noise (so the correct matching is
+  known), and disagrees on ~15% of labels (so the fusion <code>kappa</code> term
+  does real work). It measures <em>latency</em>, not accuracy. Container timings
+  on an emulated-x86 host are inflated &mdash; compare machines of like kind.</p>
+  <p>This page never reads the benchmark dumps:
+  <code>tools/fusion_ab/compare_stages.py --viz-data</code> reads them and writes
+  <code>fusion_ab_data.js</code>, loaded here as a plain script tag so it opens
+  over <code>file://</code>. Re-run it after new sweeps (on any machine) to
+  refresh &mdash; reloading this page alone will not.</p>
+</section>
+
+</div><!-- .wrap -->
+
+<script>
+(function(){
+  var D = window.FUSION_AB;
+  if(!D || !D.axes || !D.axes.length){
+    document.getElementById("empty").style.display="block";
+    return;
+  }
+
+  function cssR(n,fb){try{var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();return v||fb;}catch(e){return fb;}}
+  function esc(s){return String(s).replace(/&(?!\w+;)/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+  function fmt(v){return (v===null||v===undefined)?"—":(v>=100?v.toFixed(1):v.toFixed(2));}
+
+  // machine label -> color (Okabe-Ito; blue and vermillion first)
+  var PALETTE = [cssR('--blue','#0072b2'), cssR('--amber','#d55e00'), '#009E73', '#CC79A7'];
+  var mLabels = Object.keys(D.machines).sort();
+  var mColor = {};
+  mLabels.forEach(function(m,i){ mColor[m]=PALETTE[i%PALETTE.length]; });
+  function mName(m){ return (D.machines[m] && D.machines[m].name) || ("machine "+m); }
+
+  document.getElementById("sub").innerHTML =
+    D.classes + " classes per agent, " + D.frames + " frames, seed " + D.seed +
+    ". Color = machine; solid = modified (vectorized), dashed = reference (loops).";
+
+  // machine cards (name + GPU/CPU)
+  document.getElementById("machines").innerHTML = mLabels.map(function(m){
+    var info=D.machines[m]||{};
+    var hw=[info.gpu, info.cpu].filter(Boolean).join(" · ") || info.platform || "";
+    return '<div class="mcard"><span class="dot" style="background:'+mColor[m]+'"></span>'+
+      '<span class="nm">Machine '+esc(m)+' — '+esc(info.name||("machine "+m))+'</span>'+
+      (hw?'<div class="hw">'+esc(hw)+'</div>':'')+'</div>';
+  }).join("");
+
+  // ---- charts: one section per sweep axis, two canvases each ---------------
+  var content = document.getElementById("content");
+  var html = "";
+  D.axes.forEach(function(ax){
+    var over = ax.axis === "objects" ? "object count" : "agent count";
+    html += '<h2>Sweep over ' + over + ' (' + esc(ax.fixed_label) + ')</h2>';
+    html += '<div class="legend">';
+    mLabels.filter(function(m){return ax.machines.indexOf(m)>=0;}).forEach(function(m){
+      html += '<span><span class="swatch" style="border-top:3px solid '+mColor[m]+'"></span>'+esc(mName(m))+'</span>';
+    });
+    html += '<span><span class="swatch" style="border-top:3px solid '+cssR('--text-muted','#767676')+'"></span>modified</span>';
+    html += '<span><span class="swatch" style="border-top:2px dashed '+cssR('--text-muted','#767676')+'"></span>reference</span>';
+    html += '</div>';
+    ax.panels.forEach(function(p){
+      var cid = "chart-" + ax.axis + "-" + p.key;
+      html += '<div class="panel-title">'+esc(p.title)+'</div>'+
+              '<div class="chart-box ab" style="position:relative;">'+
+              '<canvas id="'+cid+'" style="width:100%;height:100%;"></canvas></div>';
+    });
+  });
+
+  // ---- tables: per machine, per requested combo ---------------------------
+  var cols = D.stat_columns;
+  var variants = [["reference","reference (loops)","ref"],
+                  ["modified","modified (vectorized)","mod"]];
+  mLabels.forEach(function(m){
+    var entries = D.tables[m] || [];
+    if(!entries.length) return;
+    var info=D.machines[m]||{};
+    html += '<h2>Machine '+esc(m)+' — '+esc(info.name||("machine "+m))+' &middot; per-stage tables</h2>';
+    entries.forEach(function(e){
+      html += '<h3>'+e.title+' &mdash; '+esc(info.name||("machine "+m))+'</h3>';
+      html += '<p class="caption">Per-frame ms. Unindented stages sum into '+
+              'END-TO-END; the italic row runs concurrently (tracker node), '+
+              'outside the flush budget.</p>';
+      html += '<div class="tbl-scroll"><table><thead><tr><th class="stage" rowspan="2">stage</th>';
+      variants.forEach(function(v,vi){
+        html += '<th class="grp '+v[2]+(vi?' sep':'')+'" colspan="'+cols.length+'">'+esc(v[1])+'</th>';
+      });
+      html += '</tr><tr>';
+      variants.forEach(function(v,vi){
+        cols.forEach(function(c,ci){ html += '<th'+((vi&&ci===0)?' class="sep"':'')+'>'+esc(c)+'</th>'; });
+      });
+      html += '</tr></thead><tbody>';
+      D.stage_order.forEach(function(stage){
+        var isE2E = stage==="END-TO-END";
+        var isConc = D.concurrent_stages.indexOf(stage)>=0;
+        html += '<tr class="'+(isE2E?"e2e":(isConc?"concurrent":""))+'"><td class="stage">'+
+                esc(D.stage_labels[stage]||stage)+'</td>';
+        variants.forEach(function(v,vi){
+          var cell = e.stages[v[0]] ? e.stages[v[0]][stage] : null;
+          cols.forEach(function(c,ci){
+            html += '<td class="num'+((vi&&ci===0)?' sep':'')+'">'+(cell?fmt(cell[c]):"—")+'</td>';
+          });
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+    });
+  });
+  content.innerHTML = html;
+
+  // ---- canvas line charts --------------------------------------------------
+  function niceCeil(x){
+    if(x<=0) return 1;
+    var p=Math.pow(10,Math.floor(Math.log10(x))), f=x/p;
+    var nf = f<=1?1:f<=2?2:f<=2.5?2.5:f<=5?5:10;
+    return nf*p;
+  }
+
+  // A fitted power-law curve (a*x^b) is only drawn when a series scales
+  // non-linearly -- exponent b far enough from 1 (|b-1| >= FIT_EXP_TOL);
+  // anything else just connects the measured points. The shipped/modified series
+  // measured b~0.9-1.1 (drawn as straight lines); the reference loops b~1.6-1.8
+  // (drawn as curves).
+  var FIT_EXP_TOL = 0.15;   // exponent within +-0.15 of 1 counts as linear
+
+  function drawPanel(ax, panelKey){
+    var cid = "chart-"+ax.axis+"-"+panelKey;
+    var cv=document.getElementById(cid);
+    if(!cv) return;
+    var A=ax.x, N=A.length;
+    var series=ax.data[panelKey];      // {machine:{variant:{median,p95}}}
+    var cT=cssR('--text-primary','#1a1a1a'), cM=cssR('--text-muted','#767676'), cB=cssR('--border','rgba(0,0,0,0.12)');
+    var FG=vizFigure();
+
+    var yMax=0;
+    Object.keys(series).forEach(function(m){
+      Object.keys(series[m]).forEach(function(v){
+        series[m][v].median.forEach(function(val){ if(val!==null&&val>yMax)yMax=val; });
+      });
+    });
+    yMax=niceCeil(yMax||1);
+    var xMin=A[0], xMax=A[N-1], xSpan=(xMax-xMin)||1;
+
+    var dpr=window.devicePixelRatio||1, rect=cv.getBoundingClientRect();
+    var w=rect.width||700, h=rect.height||290;
+    cv.width=w*dpr; cv.height=h*dpr;
+    var ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+
+    ctx.font=FG.tickFont;
+    var ticks=[0,0.25,0.5,0.75,1], tickW=0;
+    ticks.forEach(function(g){tickW=Math.max(tickW,ctx.measureText(Math.round(g*yMax)).width);});
+    var axisPx=parseFloat(FG.axisFont.match(/(\d+(?:\.\d+)?)px/)[1]);
+    var titleX=axisPx*0.8+4;
+    var padL=titleX+axisPx*0.22+8+tickW+6, padR=14, padT=12, padB=34+FG.padBBoost;
+    var X=function(a){return padL+(w-padL-padR)*((a-xMin)/xSpan);};
+    var Y=function(v){return padT+(h-padT-padB)*(1-v/yMax);};
+
+    ctx.strokeStyle=cB; ctx.fillStyle=cM; ctx.lineWidth=FG.grid;
+    ticks.forEach(function(g){
+      ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(padL,Y(g*yMax)); ctx.lineTo(w-padR,Y(g*yMax)); ctx.stroke(); ctx.globalAlpha=1;
+      ctx.textAlign='right'; ctx.fillText(Math.round(g*yMax), padL-6, Y(g*yMax)+3);
+    });
+    ctx.fillStyle=cM; ctx.textAlign='center';
+    A.forEach(function(a){ ctx.fillText(a, X(a), h-padB+16); });
+    ctx.fillStyle=cT; ctx.font=FG.axisFont;
+    ctx.fillText(ax.axis==="objects"?"objects":"agents", (padL+(w-padR))/2, h-4);
+    vizYTitle(ctx, 'latency (ms)', titleX, h);
+    ctx.textAlign='left';
+
+    // Fit y = a*x^b by least squares on logs (relative error, right for a
+    // latency span of orders of magnitude); null if fewer than two usable points.
+    function powerFit(pts){
+      var lx=[], ly=[];
+      A.forEach(function(a,i){var v=pts[i]; if(v===null||v<=0||a<=0)return; lx.push(Math.log(a)); ly.push(Math.log(v));});
+      var n=lx.length; if(n<2) return null;
+      var mx=0,my=0,i; for(i=0;i<n;i++){mx+=lx[i];my+=ly[i];} mx/=n; my/=n;
+      var sxx=0,sxy=0;
+      for(i=0;i<n;i++){var dx=lx[i]-mx; sxx+=dx*dx; sxy+=dx*(ly[i]-my);}
+      if(sxx===0) return null;
+      var b=sxy/sxx;
+      return {a:Math.exp(my-b*mx), b:b};
+    }
+    function dots(pts, color){
+      ctx.fillStyle=color;
+      A.forEach(function(a,i){var v=pts[i]; if(v===null)return; ctx.beginPath(); ctx.arc(X(a),Y(v),FG.series+0.5,0,2*Math.PI); ctx.fill();});
+    }
+    function segments(pts, color, dashed){   // straight lines through the points
+      ctx.strokeStyle=color; ctx.lineWidth=FG.series; ctx.setLineDash(dashed?[6,4]:[]);
+      ctx.beginPath(); var started=false;
+      A.forEach(function(a,i){var v=pts[i]; if(v===null)return; (started?ctx.lineTo:ctx.moveTo).call(ctx,X(a),Y(v)); started=true;});
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+    function curve(f, color, dashed){        // fitted a*x^b, sampled across x
+      ctx.strokeStyle=color; ctx.lineWidth=FG.series; ctx.setLineDash(dashed?[6,4]:[]);
+      ctx.beginPath();
+      for(var i=0;i<=80;i++){var xx=xMin+xSpan*i/80; (i?ctx.lineTo:ctx.moveTo).call(ctx,X(xx),Y(f.a*Math.pow(xx,f.b)));}
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+    // Curve only when the series is genuinely non-linear and the power law fits;
+    // otherwise connect the measured points. Dots (the data) always show.
+    function draw(pts, color, dashed){
+      var f=powerFit(pts);
+      if(f && Math.abs(f.b-1)>=FIT_EXP_TOL) curve(f,color,dashed);
+      else segments(pts,color,dashed);
+      dots(pts,color);
+    }
+    Object.keys(series).sort().forEach(function(m){
+      var mv=series[m];
+      if(mv.reference) draw(mv.reference.median, mColor[m], true);
+      if(mv.modified)  draw(mv.modified.median,  mColor[m], false);
+    });
+  }
+
+  function drawAll(){ D.axes.forEach(function(ax){ ax.panels.forEach(function(p){ drawPanel(ax,p.key); }); }); }
+  window.addEventListener("resize", drawAll);
+  setTimeout(drawAll, 0);
+})();
+</script>
+
+</body>
+</html>

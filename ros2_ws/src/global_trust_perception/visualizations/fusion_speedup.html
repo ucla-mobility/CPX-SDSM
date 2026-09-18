@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fusion Speedup</title>
+<link rel="stylesheet" href="viz.css">
+<script src="viz.js"></script>
+<script src="fusion_speedup_data.js"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0; padding:2rem 1.25rem; background:var(--bg); color:var(--text-primary);
+    font-family:Cambria, Georgia, "Times New Roman", serif; line-height:1.6;}
+  .wrap{max-width:760px; margin:0 auto;}
+  h1{font-size:22px; font-weight:500; margin:0 0 .35rem;}
+  .sub{font-size:14px; color:var(--text-secondary); margin:0 0 1.1rem;}
+  .legend{display:flex; gap:18px; margin-bottom:.75rem; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);}
+  .legend span{display:flex; align-items:center; gap:6px;}
+  .sw{width:16px; height:11px; display:inline-block; border-radius:2px;}
+  /* I-beam glyph for the percentile whisker in the legend */
+  .ibeam{display:inline-block; position:relative; width:12px; height:14px;}
+  .ibeam::before{content:""; position:absolute; left:5px; top:0; width:2px; height:14px; background:var(--text-primary);}
+  .ibeam::after{content:""; position:absolute; left:0; top:0; width:12px; height:2px;
+    background:var(--text-primary); box-shadow:0 12px 0 var(--text-primary);}
+  .stat{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem;}
+  .stat .lbl{font-size:13px; color:var(--text-secondary);}
+  .stat .val{font-size:22px; font-weight:500;}
+  .doc{margin-top:2.5rem; border-top:1px solid var(--border); padding-top:1.5rem;}
+  .doc h2{font-size:18px; font-weight:600; margin:0 0 1rem;}
+  .doc p{font-size:14px; color:var(--text-secondary); margin:.4rem 0;}
+  .doc code{font-family:Menlo, Consolas, monospace; font-size:12.5px; background:var(--surface-1);
+    padding:.1rem .35rem; border-radius:4px;}
+  /* This page's chart only -- taller than viz.css's shared .chart-box so three
+     decades of log axis breathe. The extra class keeps specificity above
+     viz.css's .chart-box rules so it overrides cleanly in both modes. */
+  .chart-box.fus-tall{height:520px;}
+  body.figure-mode .chart-box.fus-tall{height:420px !important;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>MS&#8209;PSF fusion: before vs. after vectorization</h1>
+<p class="sub">Phase&#8209;1 fusion time per frame (<code>mspsf</code>, which drives
+  <code>geometry.compute_self_iou_mat</code>), across four scene sizes. Lower is
+  faster; note the <em>log</em> vertical scale. Bars are medians; whiskers span
+  the 25th&ndash;75th percentile.</p>
+
+<div class="legend">
+  <span><span class="sw" style="background:var(--amber);"></span>Before &mdash; pre&#8209;vectorization (6b05baaa)</span>
+  <span><span class="sw" style="background:var(--blue);"></span>After &mdash; vectorized (ours)</span>
+  <span><span class="ibeam"></span>25&ndash;75th percentile</span>
+  <span><span class="sw" style="background:transparent; border-top:2px solid var(--text-primary); height:0; border-radius:0;"></span><span id="fus-legend-best">best run</span></span>
+</div>
+
+<div class="chart-box fus-tall" style="position:relative; margin-bottom:.75rem;"><canvas id="fus-chart" style="width:100%; height:100%;"></canvas></div>
+<div id="fus-empty" class="empty" style="display:none; padding:2.5rem 1rem; text-align:center; color:var(--text-secondary); font-size:14px;">
+  (no timings yet &mdash; run <code>make_fusion_speedup_viz.py</code> in the ros2_dev container)
+</div>
+
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:.5rem;">
+  <div class="stat"><div class="lbl">peak speedup</div><div class="val" id="fus-stat-peak">&mdash;</div></div>
+  <div class="stat"><div class="lbl" id="fus-stat-peak-lbl">at largest scene</div><div class="val" id="fus-stat-peak-abs">&mdash;</div></div>
+  <div class="stat"><div class="lbl">speedup range</div><div class="val" id="fus-stat-range">&mdash;</div></div>
+</div>
+
+<section class="doc">
+  <h2>What this is</h2>
+  <p>The wall&#8209;clock cost of one phase&#8209;1 MS&#8209;PSF fusion pass
+  (<code>fusion.mspsf</code>), timed with and without the vectorization applied
+  to <code>fusion.py</code> and <code>geometry.py</code>. The <strong>before</strong>
+  bar runs verbatim pre&#8209;vectorization code (commit <code>6b05baaa</code>):
+  Python double&#8209;loops for the affinity/kappa matrices and a per&#8209;pair
+  Shapely IoU. The <strong>after</strong> bar is the shipped code &mdash; broadcast
+  numpy and a single batched GEOS call.</p>
+  <p>The Kinematic&#8209;Dynamic orientation step is <strong>excluded</strong>:
+  <code>mspsf</code> is driven with <code>kds_scores=None</code>, so
+  <code>_orient_with_kds</code> never runs in either arm and the comparison is
+  the vectorization alone.</p>
+  <p>The x&#8209;axis is ordered by total detections <em>n</em> (senders &times;
+  objects per sender), which is what the fusion cost scales with &mdash; so the
+  widening gap left&#8209;to&#8209;right is the improvement scaling with load. A
+  log scale is used because the four scenes span three orders of magnitude; the
+  exact speedup is printed above each pair.</p>
+  <p>This page never measures anything: <code>scripts/make_fusion_speedup_viz.py</code>
+  times both arms in the emulated&#8209;x86 <code>ros2_dev</code> container
+  (reporting the median, the 25th&ndash;75th percentiles, and the best run,
+  since single runs there swing ~2&times;) and writes
+  <code>fusion_speedup_data.js</code>, loaded here as a plain script tag so the
+  page opens over <code>file://</code> with no server. Re&#8209;run the script
+  after changing <code>fusion.py</code>/<code>geometry.py</code> to refresh it.</p>
+</section>
+
+</div><!-- .wrap -->
+
+<script>
+(function(){
+  function cssR(n,fb){try{var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();return v||fb;}catch(e){return fb;}}
+
+  var data=window.FUSION_SPEEDUP||{combos:[]};
+  // Ordered by total detections n: the fusion cost scales with n, so this makes
+  // the widening before/after gap read as the scaling story, left to right.
+  var combos=(data.combos||[]).slice().sort(function(a,b){return a.n-b.n;});
+  var fvc=document.getElementById("fus-chart");
+
+  function fmtMs(v){ return v>=1000?String(Math.round(v)):v>=100?String(Math.round(v)):v.toFixed(1); }
+  function fmtDur(ms){ return ms>=1000?(ms/1000).toFixed(2)+" s":Math.round(ms)+" ms"; }
+
+  function fillStats(){
+    if(data.repeats){ document.getElementById("fus-legend-best").textContent="best of "+data.repeats; }
+    if(!combos.length) return;
+    var peak=combos[0], i;
+    for(i=0;i<combos.length;i++){ if(combos[i].speedup>peak.speedup) peak=combos[i]; }
+    var lo=combos[0].speedup, hi=combos[0].speedup;
+    for(i=0;i<combos.length;i++){ lo=Math.min(lo,combos[i].speedup); hi=Math.max(hi,combos[i].speedup); }
+    document.getElementById("fus-stat-peak").textContent=peak.speedup.toFixed(1)+"×";
+    document.getElementById("fus-stat-peak-lbl").textContent=peak.agents+" ag × "+peak.objects+" obj (n="+peak.n+")";
+    document.getElementById("fus-stat-peak-abs").textContent=fmtDur(peak.before_ms)+" → "+fmtDur(peak.after_ms);
+    document.getElementById("fus-stat-range").textContent=lo.toFixed(1)+"–"+hi.toFixed(1)+"×";
+  }
+
+  // Log-axis decades spanning the data, with a decade of headroom below and
+  // enough above the top gridline that the tallest bar's whisker + value label
+  // clear the plot ceiling (max datum ~8 s, axis top 30 s).
+  var Y_MIN=1, Y_MAX=30000, DECADES=[1,10,100,1000,10000];
+  function log10(v){return Math.log(v)/Math.LN10;}
+  var L_MIN=log10(Y_MIN), L_MAX=log10(Y_MAX);
+
+  var AMBER_DK="#8f3d00", BLUE_DK="#00466e";  // best-of-N markers, one shade down
+
+  function barTop(ctx,x,y,w,baseline,r){
+    // Rounded-top bar from `baseline` up to top `y`. Data-end rounded (4px),
+    // baseline square, per the mark spec.
+    var h=baseline-y; r=Math.min(r,w/2,Math.max(h,0));
+    ctx.beginPath();
+    ctx.moveTo(x,baseline);
+    ctx.lineTo(x,y+r);
+    ctx.quadraticCurveTo(x,y,x+r,y);
+    ctx.lineTo(x+w-r,y);
+    ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+    ctx.lineTo(x+w,baseline);
+    ctx.closePath();
+  }
+
+  function draw(){
+    if(!combos.length){
+      fvc.style.display="none";
+      document.getElementById("fus-empty").style.display="block";
+      return;
+    }
+    try{
+      var cT=cssR('--text-primary','#1a1a1a'), cS=cssR('--text-secondary','#4d4d4d'), cM=cssR('--text-muted','#767676');
+      var cB=cssR('--border','rgba(0,0,0,0.12)'), cAcc=cssR('--text-accent','#00527f');
+      var amber=cssR('--amber','#d55e00'), blue=cssR('--blue','#0072b2'), surf=cssR('--surface-2','#ffffff');
+      var FG=vizFigure();
+
+      var dpr=window.devicePixelRatio||1, rect=fvc.getBoundingClientRect(), w=rect.width||700, h=rect.height||480;
+      fvc.width=w*dpr; fvc.height=h*dpr;
+      var ctx=fvc.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+
+      // Left gutter measured from the actual tick-label width plus the column the
+      // rotated y-title needs, so neither font clips at the edge nor collides
+      // with the numbers (same approach as reputation_history.html).
+      var axisPx=parseFloat(FG.axisFont.match(/(\d+(?:\.\d+)?)px/)[1]);
+      ctx.font=FG.tickFont;
+      var tickW=0; DECADES.forEach(function(d){tickW=Math.max(tickW,ctx.measureText(String(d)).width);});
+      var titleX=axisPx*0.8+6;
+      var padL=titleX+axisPx*0.22+10+tickW+6+FG.padLBoost;
+      var padR=14;
+      var padT=axisPx+16;                              // room for the speedup row in the top margin
+      var padB=axisPx*2.0+26+FG.padBBoost;             // two x-label lines + x title
+      var plotL=padL, plotR=w-padR, plotT=padT, plotB=h-padB, plotH=plotB-plotT;
+
+      function Y(ms){ return plotT+plotH*(1-(log10(ms)-L_MIN)/(L_MAX-L_MIN)); }
+      var baseline=Y(Y_MIN);
+
+      // Marker lines carry a 2px surface halo so they stay legible over the fills
+      // (mark spec: a surface ring on overlapping marks).
+      function hLine(x1,x2,y,color,wid){
+        ctx.lineCap='butt';
+        ctx.strokeStyle=surf; ctx.lineWidth=wid+2; ctx.beginPath(); ctx.moveTo(x1,y); ctx.lineTo(x2,y); ctx.stroke();
+        ctx.strokeStyle=color; ctx.lineWidth=wid;   ctx.beginPath(); ctx.moveTo(x1,y); ctx.lineTo(x2,y); ctx.stroke();
+      }
+      function vLine(x,y1,y2,color,wid){
+        ctx.lineCap='butt';
+        ctx.strokeStyle=surf; ctx.lineWidth=wid+2; ctx.beginPath(); ctx.moveTo(x,y1); ctx.lineTo(x,y2); ctx.stroke();
+        ctx.strokeStyle=color; ctx.lineWidth=wid;   ctx.beginPath(); ctx.moveTo(x,y1); ctx.lineTo(x,y2); ctx.stroke();
+      }
+
+      // Gridlines + y tick labels (log decades)
+      ctx.strokeStyle=cB; ctx.lineWidth=FG.grid; ctx.font=FG.tickFont;
+      DECADES.forEach(function(d){
+        var y=Y(d);
+        ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(plotL,y); ctx.lineTo(plotR,y); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.fillStyle=cM; ctx.textAlign='right'; ctx.textBaseline='middle';
+        ctx.fillText(String(d),plotL-6,y);
+      });
+
+      // Axis titles
+      ctx.textBaseline='alphabetic';
+      ctx.fillStyle=cT; ctx.font=FG.axisFont; ctx.textAlign='center';
+      ctx.fillText('Scene size  (senders × objects per sender)',(plotL+plotR)/2,h-6);
+      ctx.fillStyle=cT; ctx.font=FG.axisFont;
+      vizYTitle(ctx,'Fusion time per frame (ms, log)',titleX,h);
+      ctx.textAlign='left';
+
+      // Bars, per combo group
+      var N=combos.length, groupW=(plotR-plotL)/N;
+      var barW=Math.min(groupW*0.30, 64), gap=Math.max(3,barW*0.10);
+      combos.forEach(function(c,i){
+        var cx=plotL+(i+0.5)*groupW;
+        var bx=cx-barW-gap/2, ax=cx+gap/2;
+
+        function oneBar(x,med,p25,p75,best,fill,dark){
+          var yt=Y(med), xc=x+barW/2;
+          barTop(ctx,x,yt,barW,baseline,4); ctx.fillStyle=fill; ctx.fill();
+          // 2px surface ring so adjacent fills stay separated (mark spec)
+          ctx.lineWidth=1; ctx.strokeStyle=surf; ctx.stroke();
+          // best-run floor line across the bar (series' darker shade)
+          hLine(x+1,x+barW-1,Y(best),dark,FG.thin);
+          // 25-75th percentile whisker with caps, centred (dark ink)
+          var y25=Y(p25), y75=Y(p75), capW=Math.min(barW*0.5,16);
+          vLine(xc,y75,y25,cT,FG.thin);
+          hLine(xc-capW/2,xc+capW/2,y75,cT,FG.thin);
+          hLine(xc-capW/2,xc+capW/2,y25,cT,FG.thin);
+          // median value label above the whisker top, or inside (white) when it
+          // would crowd the top margin
+          var topY=Math.min(yt,y75);
+          ctx.font=FG.smallFont; ctx.textAlign='center';
+          if(topY-plotT>16){ ctx.fillStyle=cS; ctx.textBaseline='bottom'; ctx.fillText(fmtMs(med),xc,topY-6); }
+          else { ctx.fillStyle=surf; ctx.textBaseline='top'; ctx.fillText(fmtMs(med),xc,yt+4); }
+          ctx.textBaseline='alphabetic';
+        }
+        oneBar(bx,c.before_ms,c.before_p25_ms,c.before_p75_ms,c.before_best_ms,amber,AMBER_DK);
+        oneBar(ax,c.after_ms,c.after_p25_ms,c.after_p75_ms,c.after_best_ms,blue,BLUE_DK);
+
+        // Speedup headline, centred over the group in the top margin
+        ctx.fillStyle=cAcc; ctx.font=FG.axisFont; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+        ctx.fillText(c.speedup.toFixed(c.speedup<10?2:1)+'×',cx,padT-7);
+
+        // x labels: "2 × 30" then "n = 60"
+        ctx.fillStyle=cS; ctx.font=FG.tickFont; ctx.textAlign='center'; ctx.textBaseline='top';
+        ctx.fillText(c.agents+' × '+c.objects,cx,plotB+6);
+        ctx.fillStyle=cM; ctx.font=FG.smallFont;
+        ctx.fillText('n = '+c.n,cx,plotB+6+axisPx+2);
+        ctx.textBaseline='alphabetic';
+      });
+    }catch(e){}
+  }
+
+  fillStats();
+  window.addEventListener("resize", draw);
+  setTimeout(draw, 0);
+})();
+</script>
+
+</body>
+</html>

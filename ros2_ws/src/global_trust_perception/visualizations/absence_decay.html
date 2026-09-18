@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Absence Decay</title>
+<link rel="stylesheet" href="viz.css">
+<script src="viz.js"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0; padding:2rem 1.25rem; background:var(--bg); color:var(--text-primary);
+    font-family:Cambria, Georgia, "Times New Roman", serif; line-height:1.6;}
+  .wrap{max-width:693px; margin:0 auto;}
+  h1{font-size:22px; font-weight:500; margin:0 0 1.25rem;}
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:2px;
+    background:var(--border-strong); outline:none;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; appearance:none; width:18px; height:18px;
+    border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  input[type=range]::-moz-range-thumb{width:18px; height:18px; border-radius:50%; background:var(--text-primary); cursor:pointer; border:none;}
+  .legend{display:flex; gap:16px; margin-bottom:.75rem; flex-wrap:wrap; font-size:13px; color:var(--text-secondary);}
+  .legend span{display:flex; align-items:center; gap:6px;}
+  .stat{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem;}
+  .stat .lbl{font-size:13px; color:var(--text-secondary);}
+  .stat .val{font-size:22px; font-weight:500;}
+  .doc{margin-top:2.5rem; border-top:1px solid var(--border); padding-top:1.5rem;}
+  .doc h2{font-size:18px; font-weight:600; margin:0 0 1rem;}
+  .doc h3{font-size:15px; font-weight:600; margin:1.75rem 0 .5rem;}
+  .doc p{font-size:14px; color:var(--text-secondary); margin:.4rem 0;}
+  .doc .eq{background:var(--surface-1); border-radius:var(--radius); padding:.75rem 1rem; margin:.5rem 0; overflow-x:auto;}
+  .doc table{width:100%; border-collapse:collapse; font-size:13px; margin-top:.5rem;}
+  .doc th,.doc td{text-align:left; padding:.5rem .6rem; border-bottom:1px solid var(--border); vertical-align:top;}
+  .doc th{color:var(--text-secondary); font-weight:600;}
+  .doc td:first-child{white-space:nowrap;}
+  .doc td:nth-child(2){color:var(--text-primary); font-weight:500; white-space:nowrap;}
+  .doc td:nth-child(3){color:var(--text-secondary);}
+</style>
+<script>
+  window.MathJax = { tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] } };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js" async></script>
+</head>
+<body>
+<div class="wrap">
+<h1>Absence Decay</h1>
+
+<div class="legend">
+  <span><span style="width:16px; height:0; border-top:2px dashed var(--text-muted);"></span>R_last</span>
+  <span><span style="width:16px; height:0; border-top:2px dashed var(--blue);"></span>baseline</span>
+  <span><span style="width:16px; height:3px; background:var(--amber); display:inline-block;"></span>R_seeded</span>
+  <span><span style="width:16px; height:0; border-top:1px dashed var(--text-muted); opacity:.5;"></span>current gap</span>
+</div>
+
+<div class="chart-box" style="position:relative; height:320px; margin-bottom:.5rem;"><canvas id="abs-chart" style="width:100%; height:100%;"></canvas></div>
+
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:1.25rem;">
+  <div class="stat"><div class="lbl">R_seeded at gap</div><div class="val" id="abs-stat-seeded">&mdash;</div></div>
+  <div class="stat"><div class="lbl">deviation lost</div><div class="val" id="abs-stat-lost">&mdash;</div></div>
+  <div class="stat"><div class="lbl">fraction remaining</div><div class="val" id="abs-stat-frac">&mdash;</div></div>
+  <div class="stat"><div class="lbl">effective half-life</div><div class="val" id="abs-stat-hl">&mdash;</div></div>
+</div>
+
+<div id="abs-controls" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px 20px; margin-bottom:2rem;"></div>
+
+<section class="doc">
+  <h2>Absence-gap decay</h2>
+
+  <p>When a previously seen agent re-appears after a gap, its stored reputation is decayed toward the neutral baseline before starting the new session. This is a <strong>one-shot correction</strong> applied at reseed time — not each frame.</p>
+  <p>A <strong>grace window</strong> (default 3 days) protects against brief offline periods: no decay is applied until the gap exceeds that threshold.</p>
+  <div class="eq">\[ \text{eff} = \max(0,\ \Delta t - \text{grace}) \]</div>
+  <div class="eq">\[ R_{\text{seeded}} = \text{baseline} + (R_{\text{last}} - \text{baseline})\,e^{-\text{eff}\,/\,\tau} \]</div>
+
+  <p><strong>Downward-only</strong>: if \(R_{\text{last}} \leq \text{baseline}\), the agent returns at its stored value unchanged. Silence must not reward a distrusted agent by pulling it toward neutral.</p>
+
+  <h3>Every variable</h3>
+  <table>
+    <thead><tr><th>Symbol</th><th>Name</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td>\(R_{\text{last}}\)</td><td>stored reputation</td><td>Most-recent reputation written to the database for this agent before the gap</td></tr>
+      <tr><td>\(R_{\text{seeded}}\)</td><td>seeded reputation</td><td>The reputation the new session starts from; replaces \(R_{\text{last}}\) in memory. Equals \(R_{\text{last}}\) when \(\Delta t \leq \text{grace}\) or \(R_{\text{last}}\leq\text{baseline}\)</td></tr>
+      <tr><td>\(\text{baseline}\)</td><td>neutral reputation</td><td>The value reputation decays toward during silence (default 0.5 = REPUTATION_DEFAULT)</td></tr>
+      <tr><td>\(\Delta t\)</td><td>gap duration (s)</td><td>Seconds elapsed since the last database timestamp (\(\text{time.time()}_{\text{now}} - \text{ts}_{\text{last}}\))</td></tr>
+      <tr><td>grace</td><td>grace window (s)</td><td>Minimum absence before decay begins. Returns \(R_{\text{last}}\) unchanged if \(\Delta t \leq \text{grace}\). System default: GRACE_GAP_S = 3 days (259 200 s)</td></tr>
+      <tr><td>\(\tau\)</td><td>decay time constant (s)</td><td>Controls how quickly the deviation from baseline shrinks once past the grace window. Half-life \(= \tau\ln 2\approx 0.693\,\tau\). System default: \(\tau=576{,}000\,\text{s}\approx6.67\,\text{d}\), giving half-life\(\approx4.6\,\text{d}\)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Relationship to persistence penalty</h3>
+  <p>Absence decay modifies the <em>stored</em> reputation used to seed the next session (applied once at reseed). The persistence penalty weight \(V\), by contrast, is a gate-only multiplier applied each frame that never writes back to stored \(R\). They operate at different phases: absence decay at reseed time (once per gap), \(V\) at every frame.</p>
+
+  <h3>Timescale calibration</h3>
+  <p>With grace = 3 days and \(\tau=576{,}000\,\text{s}\approx6.67\,\text{d}\) (half-life\(\approx4.6\,\text{d}\) from grace end):</p>
+  <table>
+    <thead><tr><th>Total gap</th><th>Effective gap</th><th>Deviation remaining</th><th>Example: R_last=0.9, baseline=0.5</th></tr></thead>
+    <tbody>
+      <tr><td>3 days (grace)</td><td>0</td><td>100%</td><td>R_seeded = 0.9 (unchanged)</td></tr>
+      <tr><td>7.6 days</td><td>4.6 days (half-life)</td><td>50%</td><td>R_seeded &asymp; 0.70</td></tr>
+      <tr><td>17 days</td><td>14 days</td><td>&asymp;16%</td><td>R_seeded &asymp; 0.56</td></tr>
+      <tr><td>30 days</td><td>27 days</td><td>&asymp;2%</td><td>R_seeded &asymp; 0.507</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</div><!-- .wrap -->
+
+<script>
+(function(){
+  // GRACE_GAP_S from absence_decay.py = 259_200 s = 3 days.
+  // TAU_GAP_S from absence_decay.py = 576_000 s → τ in days = 576000/86400 ≈ 6.667
+  var GRACE_DEFAULT_DAYS = 259200 / 86400;
+  var TAU_DEFAULT_DAYS = 576000 / 86400;
+  var MAX_GAP_DAYS = 60;
+
+  var PA = {
+    r_last:{v:0.9, min:0, max:1, step:0.01, label:"R_last  (reputation before gap)",
+      fmt:function(v){return v.toFixed(2);}},
+    baseline:{v:0.5, min:0, max:1, step:0.01, label:"baseline  (neutral)",
+      fmt:function(v){return v.toFixed(2);}},
+    tau_days:{v:TAU_DEFAULT_DAYS, min:0.5, max:90, log:true, label:"τ  (decay time constant)",
+      fmt:function(v){var hl=v*Math.LN2; return "τ="+v.toFixed(2)+"d  (t½="+hl.toFixed(2)+"d)";}},
+    gap_days:{v:7.0, min:0, max:MAX_GAP_DAYS, step:0.5, label:"current gap Δt",
+      fmt:function(v){return v.toFixed(1)+" d";}},
+    shift_days:{v:GRACE_DEFAULT_DAYS, min:0, max:14, step:0.5, label:"grace  (days before decay starts)",
+      fmt:function(v){return v.toFixed(1)+" d";}}
+  };
+
+  function cssVarA(n,fb){ try{ var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||fb; }catch(e){ return fb; } }
+
+  function fmtA(key){ var p=PA[key]; if(p.fmt) return p.fmt(p.v); return p.step<1?p.v.toFixed(2):String(Math.round(p.v)); }
+
+  function absenceDecay(R_last, gap_days, tau_days, baseline, shift_days){
+    if(R_last <= baseline) return R_last;
+    var eff=Math.max(0, gap_days - shift_days);
+    return baseline + (R_last - baseline) * Math.exp(-eff / tau_days);
+  }
+
+  var avc = document.getElementById("abs-chart");
+
+  function drawAbsence(){
+    try{
+      var R_last=PA.r_last.v, baseline=PA.baseline.v, tau=PA.tau_days.v, gap=PA.gap_days.v, shift=PA.shift_days.v;
+      var R_seeded=absenceDecay(R_last,gap,tau,baseline,shift);
+      var dev_total=R_last>baseline ? R_last-baseline : 0;
+      var dev_lost=R_last>baseline ? R_last-R_seeded : 0;
+      var frac_rem=dev_total>1e-9 ? (R_seeded-baseline)/dev_total : 1.0;
+
+      document.getElementById("abs-stat-seeded").textContent=R_seeded.toFixed(3);
+      document.getElementById("abs-stat-lost").textContent=dev_lost.toFixed(3);
+      document.getElementById("abs-stat-frac").textContent=(frac_rem*100).toFixed(1)+"%";
+      document.getElementById("abs-stat-hl").textContent=(tau*Math.LN2).toFixed(2)+" d";
+
+      var cT=cssVarA('--text-muted','#767676'), cB=cssVarA('--border','rgba(0,0,0,0.12)');
+      var amber=cssVarA('--amber','#d55e00'), blue=cssVarA('--blue','#0072b2');
+      var cTitle=cssVarA('--text-primary','#1a1a1a');
+      var FG=vizFigure();
+
+      var dpr=window.devicePixelRatio||1, rect=avc.getBoundingClientRect(), w=rect.width||600, h=rect.height||320;
+      avc.width=w*dpr; avc.height=h*dpr;
+      var ctx=avc.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+
+      var padL=54+FG.padLBoost, padR=12, padT=14, padB=40+FG.padBBoost;
+      var X=function(d){ return padL+(w-padL-padR)*d/MAX_GAP_DAYS; };
+      var Y=function(v){ return padT+(h-padT-padB)*(1-v); };
+
+      ctx.strokeStyle=cB; ctx.fillStyle=cT; ctx.font=FG.tickFont; ctx.lineWidth=FG.grid;
+      [0,0.25,0.5,0.75,1].forEach(function(g){
+        ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(padL,Y(g)); ctx.lineTo(w-padR,Y(g)); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.textAlign='right'; ctx.fillText(g.toFixed(2),padL-6,Y(g)+3);
+      });
+
+      [0,15,30,45,60].forEach(function(d){
+        var px=X(d);
+        ctx.strokeStyle=cB; ctx.globalAlpha=FG.gridAlpha; ctx.beginPath(); ctx.moveTo(px,padT); ctx.lineTo(px,h-padB); ctx.stroke(); ctx.globalAlpha=1;
+        ctx.fillStyle=cT; ctx.textAlign=(d===0?'left':(d===MAX_GAP_DAYS?'right':'center'));
+        ctx.fillText(d+"d",px,h-padB+14);
+      });
+      ctx.textAlign='left';
+      ctx.fillStyle=cTitle; ctx.font=FG.axisFont; ctx.textAlign='center';
+      ctx.fillText('Absence Gap (Δt, days)', (padL+(w-padR))/2, h-6);
+      vizYTitle(ctx, 'Reputation (R)', FG.axisPad, h);
+      ctx.textAlign='left';
+
+      ctx.strokeStyle=cT; ctx.lineWidth=FG.thin; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(padL,Y(R_last)); ctx.lineTo(w-padR,Y(R_last)); ctx.stroke();
+
+      ctx.strokeStyle=blue; ctx.lineWidth=FG.thin; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(padL,Y(baseline)); ctx.lineTo(w-padR,Y(baseline)); ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.strokeStyle=amber; ctx.lineWidth=FG.series; ctx.beginPath();
+      for(var i=0;i<=300;i++){
+        var d_i=MAX_GAP_DAYS*i/300, r_i=absenceDecay(R_last,d_i,tau,baseline,shift);
+        if(i===0) ctx.moveTo(X(d_i),Y(r_i)); else ctx.lineTo(X(d_i),Y(r_i));
+      }
+      ctx.stroke();
+
+      if(shift>0){
+        var px_shift=X(shift);
+        ctx.strokeStyle=cT; ctx.lineWidth=1; ctx.globalAlpha=0.4; ctx.setLineDash([2,4]);
+        ctx.beginPath(); ctx.moveTo(px_shift,padT); ctx.lineTo(px_shift,h-padB); ctx.stroke();
+        ctx.globalAlpha=1; ctx.setLineDash([]);
+        ctx.fillStyle=cT; ctx.font=FG.smallFont; ctx.textAlign="center";
+        // At the grace x the curve sits at R_last (it only decays past this
+        // point), so put the label on whichever end of the marker is clear of
+        // it: the bottom when R_last is high (the common case), the top when a
+        // dragged-down R_last leaves the curve near the floor instead.
+        ctx.fillText("grace",px_shift,R_last>0.5?h-padB-6:padT+14);
+        ctx.textAlign="left";
+      }
+
+      var px_gap=X(gap);
+      ctx.strokeStyle=cT; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(px_gap,padT); ctx.lineTo(px_gap,h-padB); ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle=amber;
+      ctx.beginPath(); ctx.arc(px_gap,Y(R_seeded),5,0,Math.PI*2); ctx.fill();
+
+      ctx.fillStyle=cT; ctx.font=FG.tickFont;
+      var lx=px_gap+8, ly=Y(R_seeded)-6;
+      if(lx+40>w-padR) lx=px_gap-46;
+      ctx.fillText(R_seeded.toFixed(3),lx,ly);
+    }catch(e){}
+  }
+
+  var actrl=document.getElementById("abs-controls");
+  Object.keys(PA).forEach(function(key){
+    var p=PA[key], wrap=document.createElement("div");
+    var head=document.createElement("div");
+    head.style.cssText="display:flex; justify-content:space-between; font-size:13px; color:var(--text-secondary); margin-bottom:4px;";
+    var lab=document.createElement("span"); lab.textContent=p.label;
+    var out=document.createElement("span"); out.style.cssText="font-weight:500; color:var(--text-primary);"; out.textContent=fmtA(key);
+    head.appendChild(lab); head.appendChild(out); wrap.appendChild(head);
+    var inp=document.createElement("input"); inp.type="range";
+    if(p.log){
+      inp.min=Math.log10(p.min); inp.max=Math.log10(p.max); inp.step=(inp.max-inp.min)/300; inp.value=Math.log10(p.v);
+      inp.addEventListener("input",function(){ p.v=Math.pow(10,parseFloat(inp.value)); out.textContent=fmtA(key); drawAbsence(); });
+    } else {
+      inp.min=p.min; inp.max=p.max; inp.step=p.step; inp.value=p.v;
+      inp.addEventListener("input",function(){ p.v=parseFloat(inp.value); out.textContent=fmtA(key); drawAbsence(); });
+    }
+    wrap.appendChild(inp); actrl.appendChild(wrap);
+  });
+
+  window.addEventListener("resize", drawAbsence);
+  setTimeout(drawAbsence, 0);
+})();
+</script>
+
+</body>
+</html>
