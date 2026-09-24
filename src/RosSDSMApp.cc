@@ -114,6 +114,7 @@ std::vector<double> RosSDSMApp::s_aoiSamples_;
 uint64_t RosSDSMApp::s_redundantCount_ = 0;
 uint64_t RosSDSMApp::s_redundantTotal_ = 0;
 long RosSDSMApp::s_nextMessageId_ = 0;
+std::vector<RosSDSMApp::HiddenObject> RosSDSMApp::s_hiddenObjects_;
 std::ofstream* RosSDSMApp::s_vehicleSummaryLog_ = nullptr;
 bool RosSDSMApp::s_vehicleSummaryHeaderWritten_ = false;
 std::mutex RosSDSMApp::s_vehicleSummaryMtx_;
@@ -367,6 +368,10 @@ void RosSDSMApp::initialize(int stage) {
         attackerFraction_ = par("attackerFraction").doubleValue();
         attackType_ = par("attackType").stdstringValue();
         spoofJumpDistance_ = par("spoofJumpDistance").doubleValue();
+        phantomOffsetDistance_ = par("phantomOffsetDistance").doubleValue();
+        hiddenObjects_ = par("hiddenObjects").intValue();
+        hiddenHostPeriod_ = std::max(1, static_cast<int>(par("hiddenHostPeriod").intValue()));
+        sensorRange_ = par("sensorRange").doubleValue();
         attackerPureMode_ = par("attackerPureMode").boolValue();
 
         csvLoggingEnabled_ = par("csvLoggingEnabled").boolValue();
@@ -403,7 +408,9 @@ void RosSDSMApp::initialize(int stage) {
             // fixed offset from its sender -- a stable, trackable-but-fake trajectory,
             // instead of teleporting to a fresh random spot every message.
             const double ang = uniform(0.0, 2 * M_PI);
-            const double dist = uniform(20.0, std::max(20.0, std::min(80.0, detectionRange_)));
+            const double dist = phantomOffsetDistance_ > 0.0
+                ? phantomOffsetDistance_
+                : uniform(20.0, std::max(20.0, std::min(80.0, detectionRange_)));
             phantomOffsetX_ = dist * std::cos(ang);
             phantomOffsetY_ = dist * std::sin(ang);
         }
@@ -1402,11 +1409,49 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
         payload->setOffset_x(numObj, static_cast<int>(std::round((phantomX - pos.x) * 10.0)));
         payload->setOffset_y(numObj, static_cast<int>(std::round((phantomY - pos.y) * 10.0)));
         payload->setOffset_z(numObj, 0);
-        payload->setObj_speed(numObj, 0);
-        payload->setObj_heading(numObj, 28800);  // unavailable
+        // Ghost moves rigidly with the attacker, so it reports the attacker's own speed and
+        // heading like a real vehicle would (speed 0 on a moving object is trivially fake).
+        payload->setObj_speed(numObj, static_cast<int>(std::round(spd / 0.02)));
+        double phantomHdgDeg = std::fmod(heading * 180.0 / M_PI + 360.0, 360.0);
+        payload->setObj_heading(numObj, phantomHdgDeg <= 359.9875
+            ? static_cast<int>(std::round(phantomHdgDeg / 0.0125)) : 28800);
         payload->setObj_measurement_time_ms(numObj, static_cast<uint16_t>(static_cast<long>(now * 1000) & 0xFFFF));
         numObj++;
         payload->setNumObjects(numObj);
+    }
+
+    // Sensor-only objects: real static obstacles that do not broadcast, so they are known
+    // only to vehicles whose sensor reaches them. A host vehicle creates one near where it
+    // first sends; every vehicle within sensorRange_ reports it (a pure attacker sends only
+    // its lie).
+    if (hiddenObjects_ > 0 && !(isAttacker_ && attackerPureMode_)) {
+        if (!hiddenCreated_ && nodeIndex_ >= 0 && nodeIndex_ % hiddenHostPeriod_ == 0
+            && static_cast<int>(s_hiddenObjects_.size()) < hiddenObjects_) {
+            hiddenCreated_ = true;
+            const double hAng = uniform(0.0, 2 * M_PI);
+            const double hDist = uniform(15.0, 35.0);
+            s_hiddenObjects_.push_back({800000 + static_cast<int>(s_hiddenObjects_.size()),
+                                        pos.x + hDist * std::cos(hAng), pos.y + hDist * std::sin(hAng)});
+        }
+        for (const auto& h : s_hiddenObjects_) {
+            if (numObj >= 32 || numObj >= maxObjectsPerSdsm_) break;
+            if (std::hypot(h.x - pos.x, h.y - pos.y) > sensorRange_) continue;
+            double hx = h.x, hy = h.y;
+            if (positionNoiseStdDev_ > 0.0) {
+                hx += normal(0.0, positionNoiseStdDev_);
+                hy += normal(0.0, positionNoiseStdDev_);
+            }
+            payload->setObj_type(numObj, 1);
+            payload->setObject_id(numObj, h.id);
+            payload->setOffset_x(numObj, static_cast<int>(std::round((hx - pos.x) * 10.0)));
+            payload->setOffset_y(numObj, static_cast<int>(std::round((hy - pos.y) * 10.0)));
+            payload->setOffset_z(numObj, 0);
+            payload->setObj_speed(numObj, 0);
+            payload->setObj_heading(numObj, 28800);  // static: no heading
+            payload->setObj_measurement_time_ms(numObj, static_cast<uint16_t>(static_cast<long>(now * 1000) & 0xFFFF));
+            numObj++;
+            payload->setNumObjects(numObj);
+        }
     }
 
     // Realistic packet size: base header + per-object data
@@ -1824,6 +1869,7 @@ void RosSDSMApp::openCsvLogs(const std::string& prefix, int runNumber) {
     s_totalRx_.store(0);
     s_rxDetailLogCounter_.store(0);
     s_nextMessageId_ = 0;
+    s_hiddenObjects_.clear();
     s_maxNodeIndexForMetadata = -1;
     s_sendIntervalForMetadata = -1.0;
     s_assocParsedTotal_.store(0);

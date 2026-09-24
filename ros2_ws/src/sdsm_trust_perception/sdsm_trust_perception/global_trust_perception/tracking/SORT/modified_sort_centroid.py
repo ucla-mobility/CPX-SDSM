@@ -102,11 +102,14 @@ class KalmanCentroidTracker:
                  global_xy: np.ndarray,
                  dims: np.ndarray = np.zeros(3),
                  initial_vel: np.ndarray = np.zeros(2),
-                 min_hits: int = 3):
+                 min_hits: int = 3,
+                 dt: float = 1.0):
         """
         global_xy   : (2,) [x, y] in metres
         dims        : (3,) [width, length, height] in metres
         initial_vel : (2,) [vx, vy] in m/s — seeded from SDSM heading/speed
+        dt          : seconds advanced per predict() (the caller's frame interval);
+                      velocity stays in m/s, so predictions are dt*v per frame
         """
         self.min_hits  = min_hits
         self.confirmed = False
@@ -116,8 +119,8 @@ class KalmanCentroidTracker:
         self.kf = KalmanFilter(dim_x=6, dim_z=4)
 
         self.kf.F = np.array([
-            [1, 0, 0, 0, 1, 0],   # x  += vx
-            [0, 1, 0, 0, 0, 1],   # y  += vy
+            [1, 0, 0, 0, dt, 0],  # x  += vx*dt
+            [0, 1, 0, 0, 0, dt],  # y  += vy*dt
             [0, 0, 1, 0, 0, 0],   # w   (constant)
             [0, 0, 0, 1, 0, 0],   # l   (constant)
             [0, 0, 0, 0, 1, 0],   # vx  (constant)
@@ -311,7 +314,9 @@ class Sort:
     """
 
     def __init__(self, max_age: int = 3, min_hits: int = 3,
-                 iou_threshold: float = _IOU_THRESHOLD):
+                 iou_threshold: float = _IOU_THRESHOLD,
+                 dt: float = 1.0):
+        self.dt            = dt
         self.max_age       = max_age
         self.min_hits      = min_hits
         self.iou_threshold = iou_threshold
@@ -394,7 +399,7 @@ class Sort:
         for dk in unmatched_dets:
             vel  = velocities[dk] if velocities is not None else np.zeros(2)
             d    = dims[dk]       if dims is not None       else np.zeros(3)
-            trk  = KalmanCentroidTracker(global_xy[dk], d, vel, self.min_hits)
+            trk  = KalmanCentroidTracker(global_xy[dk], d, vel, self.min_hits, self.dt)
             self.trackers.append(trk)
             assigned[dk] = trk
 

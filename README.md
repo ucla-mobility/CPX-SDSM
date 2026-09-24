@@ -102,6 +102,9 @@ Used by the `trust_*` configs in `simulations/omnetpp_trust.ini`. With every val
 | `attackType` | `"phantom"` | **`"phantom"`** fabricates an extra object (id `900000+nodeIndex`) at a fixed offset; **`"spoof"`** teleports one locked-on real neighbor by `spoofJumpDistance` |
 | `spoofJumpDistance` | **150 m** | Teleport distance for `attackType="spoof"` |
 | `attackerPureMode` | false | Attacker sends **only** its lie (no honest objects), so mixed-in honest traffic cannot inflate its reputation |
+| `phantomOffsetDistance` | **0 m** | >0: fixed distance of the phantom from its sender (default: random 20-80 m); large values hide it from other vehicles |
+| `hiddenObjects` | **0** | Number of real, static, **non-broadcasting** obstacles (think parked vehicles, pedestrians) only sensed by vehicles within `sensorRange`. Vehicles with `nodeIndex % hiddenHostPeriod == 0` each create one near where they first send |
+| `hiddenHostPeriod` / `sensorRange` | **2** / **50 m** | Which vehicles create a hidden object / how close a vehicle must be to sense it |
 
 ### `trust_sdsm_v2` — engine constants (`sdsm_trust_perception`)
 
@@ -115,6 +118,10 @@ Used by the `trust_*` configs in `simulations/omnetpp_trust.ini`. With every val
 | `SUPPORT_THRESHOLD_THETA` | **1.0** | Reputation mass needed to corroborate a report |
 | `T_DEADLINE_S` | **15 s** | Grace window before an uncorroborated report is back-charged |
 | `flush_interval_s` | **0.5 s** | Verdict bucket width (launch parameter) |
+| `OPPORTUNITY_RANGE_M` / `NEAR_REPORT_M` | **150 m** / **10 m** | Probabilistic admission: who could have witnessed an object / what counts as having reported it |
+| `P_ADMIT` / `KDS_IMPLAUSIBLE` | **0.4** / **0.3** | Probabilistic admission: minimum belief to admit / kinematic score below which motion is implausible |
+| `LIAR_EWMA_ALPHA` / `LIAR_FREQ` | **0.1** / **0.5** | Probabilistic admission: weight of the newest frame / false-frequency at which a sender is filtered out |
+| `contradiction_persist` / `opportunity_range_m` | **1 flush** / **150 m** | Strict + unverified / probabilistic: a contradiction must persist this many flushes before it counts (`--persist`); how close a witness must be to have been able to see an object (`--opportunity-range`; set it to the sensors' real range) |
 
 ### Greedy / hybrid v1 utility (NED + `[General]` in `omnetpp.ini`)
 
@@ -212,6 +219,8 @@ Unlike the three policies above, this is **not** a dissemination policy: it chan
 | **`trust_noise_n10`** | `positionNoiseStdDev = 0.5 m` on every report | Honest-but-imperfect sensors should not be rejected |
 | **`trust_phantom_n10`** | 20 % of vehicles fabricate a fake object | Uncorroborated fabrication should be caught |
 | **`trust_spoof_n10`** | 20 % of vehicles teleport a real neighbor's position by 150 m | Kinematically impossible jumps should be caught |
+| **`trust_hidden_n10`** | 5 real static obstacles only sensed within 50 m | Real objects that only some vehicles see: are they admitted? |
+| **`trust_hidden_phantom_n10`** | Hidden real obstacles + 20 % phantom attackers | Can the layer separate real unique sightings from phantoms? |
 
 `attackerPureMode` (a command-line/ini override, not a named config) additionally strips an attacker's honest traffic so its reputation reflects only the lie.
 
@@ -219,27 +228,78 @@ Unlike the three policies above, this is **not** a dissemination policy: it chan
 |----------------------------------------------|--------------|
 | **Gate** | `R_eff` vs the dynamic threshold `τ(R)`; a failing sender's data is withheld but it keeps being scored so it can recover |
 | **Kinematic check** | Flags a tracked object whose reported position jumps implausibly from its prior track |
-| **Match** | A sender's report is *matched* when it agrees with the judge's own view of the same `object_id`; otherwise it is `other_only` |
-| **Corroboration** | Only the judge's own direct match can corroborate. **No** sender may vouch for itself |
+| **Align** | Every detection (the judge's and each sender's) is dead-reckoned to the bucket's common instant using its speed and heading, so views taken up to 0.5 s apart can be compared |
+| **Cluster (MS-PSF)** | One reputation-weighted fusion (`mmcooper_fuse`) over the judge and every sender groups all reports of the same real object into a cluster; a sender's report is *matched* if the judge is in its cluster, else `other_only` |
+| **Corroboration** | An `other_only` report is corroborated when the *other* senders in its cluster carry enough reputation mass (`SUPPORT_THRESHOLD_THETA`); a sender can never vouch for itself, and low-reputation colluders cannot corroborate each other |
 | **Deferred ledger** | Uncorroborated reports are held for `T_DEADLINE_S`, then back-charged as incorrect (back-paid as correct if corroborated in time) |
 | **Reputation** | `R_new = R_old + 0.10·(C−I)/N_total`; every sender starts at 0.5, below the gate's fixed point (~0.648), so new senders start gate-failed by design |
+| **Admission** | Per object: a sender at/above `HIGH_TRUST` (0.95) has everything admitted (optimistic tier); below it only corroborated objects pass. `--high-trust 2` (engine arg `high_trust`) removes the optimistic tier |
+| **Probabilistic admission** (opt-in, `--admission probabilistic`) | Replaces the tiers with a per-object belief `R · kinematic score · exp(−missed witnesses)`, where *missed witnesses* are reputation-weighted vehicles within 150 m that did not report the object (a vehicle reporting anything within 10 m does not count). An object is *contradicted* if missed weight ≥ 1 or its motion is implausible; contradicted objects are never admitted, and a sender with contradicted objects in most recent frames (EWMA ≥ 0.5) is filtered out entirely until it recovers. Objects nobody could have witnessed are not penalized. **Experimental:** it does not scale to high density (see validation) and cannot catch a phantom hidden away from other vehicles |
+| **Strict + unverified** (opt-in, `--admission strict_unverified`, engine `admission='strict_unverified'`) | Strict `admitted` (matched or peer-corroborated only), plus a separate `unverified` class in `FrameStats.unverified`: objects from a gate-passing sender that nobody confirms and nobody contradicts (belief `R · kinematic score · exp(−missed witnesses)` ≥ 0.4). The consumer sees three classes: **confirmed** / **unverified** / **rejected**. A real object only one vehicle senses lands in *unverified* rather than being lost; a phantom that other vehicles could have seen but did not report is *rejected* |
 
-**Validation (10 vehicles, single seed, isolated reputation DBs):**
+**Validation (single seed, isolated reputation DBs, honest judges only).** Each cell that has two values reads *default admission → strict admission* (`--high-trust 0.95` → `--high-trust 2`, i.e. no optimistic tier: every admitted object must be corroborated). "Within 150 m" is the share of a sender's objects within 150 m of the judge that were admitted, which is what the judge can act on; objects farther from every vehicle cannot be checked by anyone yet.
 
-| Scenario | Attacker avg final reputation | Honest avg final reputation | Attacker untrusted rate | Honest untrusted rate |
-|----------|------------------------------|-----------------------------|-------------------------|-----------------------|
-| Phantom (mixed) | 0.633 | 0.808 | 82.3 % | 58.5 % |
-| Spoof (mixed) | 0.628 | 0.807 | 82.3 % | 59.2 % |
-| Pure phantom | 0.500 | 0.775 | 100.0 % | 63.2 % |
-| Pure spoof | 0.600 | 0.800 | 86.5 % | 60.3 % |
+*10 vehicles, 100 s*
 
-The clean separation of attackers from honest senders depends on a corroboration fix: an earlier version let a sender's own reputation satisfy its own corroboration requirement, so a well-reputed liar vouched for itself and was never caught. The honest untrusted rate (~60 %) is largely the cold-start tax (every sender begins below the gate), not evidence of misjudgment.
+| Scenario | Attacker reputation | Attacker rejected | Attacker's lie admitted | Honest reputation | Honest rejected | Honest objects admitted (within 150 m) |
+|----------|--------------------|-------------------|-------------------------|-------------------|-----------------|----------------------------------------|
+| Clean (control) | n/a | n/a | n/a | 0.99 | 7 % | 93 → 90 % |
+| Noise (σ = 0.5 m) | n/a | n/a | n/a | 0.98 | 8 % | 93 → 90 % |
+| Phantom (mixed) | 0.98 | 3 % | phantoms 81 → **0 %** | 0.99 | 7 % | 94 → 91 % |
+| Spoof (mixed) | 0.71 | 51 % | n/a | 0.99 | 7 % | 93 → 90 % |
+| Pure phantom | 0.10 | 100 % | 0 % | 0.99 | 7 % | 94 → 91 % |
+| Pure spoof | 0.22 | 100 % | 0 % | 0.99 | 7 % | 94 → 90 % |
+
+*150 vehicles, 90 s (about 30 senders per judge, 20 % attackers)*
+
+| Scenario | Attacker reputation | Attacker rejected | Attacker's lie admitted | Honest reputation | Honest rejected | Honest objects admitted (within 150 m) |
+|----------|--------------------|-------------------|-------------------------|-------------------|-----------------|----------------------------------------|
+| Clean (control) | n/a | n/a | n/a | 0.95 | 7 % | 89 % (strict) |
+| Phantom (mixed) | 0.94 | 7 % | phantoms 79 → **1 %** | 0.95 | 6 % | 94 → 89 % |
+| Spoof (mixed) | 0.95 | 6 % | spoofed reports 0.4 % admitted (19,508 identified by comparing each report against the real sender's own broadcast position) | 0.96 | 6 % | 91 % (strict) |
+| Pure phantom | 0.35 | 92 % | 2 % | 0.96 | 6 % | 91 % (strict) |
+| Pure spoof | 0.43 | 100 % | 0 % | 0.95 | 6 % | 89 % (strict) |
+
+Reading it:
+
+- **Senders that only lie are shut out** (rejected on nearly every message). A sender that mixes a lie among honest reports stays *trusted as a sender* (its honest objects dilute the charge in `S_frame = (C−I)/N_total`), so the protection there is per object: under strict admission a mixed attacker's phantom is admitted 0-1 % of the time, versus about 80 % under default admission.
+- **Cost of strict:** about 3-5 points of honest objects within 150 m. The honest objects strict still drops are almost all objects more than 150 m from every vehicle, which nothing can corroborate.
+- **A phantom hidden far from every other vehicle** (10 vehicles, 400 m from its sender) is *not* stopped by `--admission probabilistic` (83 % admitted) but is by strict (0 %).
+- **Real objects that only one vehicle senses are the cost of strict.** In `trust_hidden_n10` (5 real static obstacles, 10 vehicles, sensor range 50 m; 150 of 182 reports were unique sightings) strict admits **0 %** of the unique sightings and 11 % of the hidden-object reports overall, versus 68 % / 67 % under default admission and 57 % / 60 % under probabilistic. With phantom attackers added (`trust_hidden_phantom_n10`) strict still admits 0 % of phantoms but also 0 % of unique real sightings; default admits 84 % of phantoms. This scenario deliberately makes unique sightings common; this simulator's ordinary traffic (every object is a V2X-equipped vehicle) rarely produces them, so the ~90 % honest-object figures above understate the cost for real sensor-shared objects.
+- **Strict + unverified recovers most of them as "unverified"** (10 vehicles, 100 s, gate-passing senders only; each cell is confirmed / unverified / rejected):
+
+| Scenario | Real unique sightings | Phantoms | Honest vehicle objects |
+|----------|-----------------------|----------|------------------------|
+| `trust_hidden_n10`, strict | 0 / 0 / 100 % | n/a | 86 / 0 / 14 % |
+| `trust_hidden_n10`, strict + unverified | 0 / **66** / 34 % | n/a | 86 / 10 / 4 % |
+| `trust_hidden_phantom_n10`, strict | 0 / 0 / 100 % | 0 / 0 / 100 % | 80 / 0 / 20 % |
+| `trust_hidden_phantom_n10`, strict + unverified | 0 / **62** / 38 % | 0 / 3 / **97 %** | 80 / 16 / 4 % |
+| far-hidden phantom (400 m), strict | n/a | 0 / 0 / 100 % | 81 / 0 / 19 % |
+| far-hidden phantom (400 m), strict + unverified | n/a | 0 / **87** / 13 % | 81 / 14 / 5 % |
+
+  Confirmed sets are identical to strict (nothing new is admitted). What changes is what happens to the rest: nearly all honest objects strict dropped (13-21 %) become *unverified* (10-17 %) instead of vanishing, and about two thirds of real unique sightings do too. The price is that a phantom **hidden away from every vehicle** is also *unverified* (87 %), so the unverified class cannot separate a real unique sighting from a far-hidden phantom; that ambiguity is inherent to receiver-side checks. Phantoms placed among other vehicles are rejected (97 %). Spoofed objects (10 vehicles, ground-truth detector): 0 % admitted, 19 % unverified, 81 % rejected. The 34-38 % of real unique sightings still rejected are objects that some vehicle 60-150 m away "could have seen" by the opportunity rule (150 m) but not by this scenario's 50 m sensor range, so the opportunity range should match the sensor.
+- **Reducing real objects rejected in strict + unverified mode.** Diagnosis on the all-real run (`trust_hidden_n10`): real objects were rejected because vehicles in range did not report them (100 % of rejected hidden objects, 53 % of rejected vehicle objects) or because motion looked implausible (42 % of rejected vehicle objects), and 71 % of rejected frames were blips of 3 flushes or fewer. Two options address this: `--persist N` (a contradiction must last N flushes) and `--opportunity-range M` (the distance within which a witness could have seen an object). Sweep, strict + unverified mode, 10 vehicles (this scenario's sensor range is 50 m):
+
+| `--persist` | `--opportunity-range` | Real unique sightings rejected | Honest vehicle objects rejected | Near phantoms (conf / unv / rej) | Far phantoms (conf / unv / rej) |
+|-------------|-----------------------|--------------------------------|---------------------------------|-----------------------------------|----------------------------------|
+| 1 | 150 | 34 % | 3.6 % | 0 / 3 / **97 %** | 0 / 87 / 13 % |
+| 3 | 150 | 26 % | 0.6 % | 0 / 7 / 93 % | 0 / 96 / 4 % |
+| 3 | **100** | **4 %** | 0.7 % | 0 / 12 / **88 %** | 0 / 96 / 4 % |
+| 3 | 60 | 0 % | 0.7 % | 0 / 34 / 66 % | 0 / 96 / 4 % |
+| 5 | 100 | 1 % | 0.2 % | 0 / 18 / 82 % | 0 / 96 / 4 % |
+
+  Persistence removes most honest-vehicle rejections (3.6 % → 0.6 %) at a small cost: phantoms slip from *rejected* to *unverified* (97 % → 93 %). A range closer to the sensor's real range cuts real unique sightings rejected from 34 % to 4-7 %, but a shorter range also lets more near phantoms through to *unverified* because fewer vehicles count as able to contradict them. Nothing is ever newly *confirmed*: near phantoms and spoofed objects stay 0 % confirmed in every row, though with `--persist 3` spoofed objects move from 19 % to 51 % *unverified* (0 % admitted either way). A reasonable starting point is `--persist 3 --opportunity-range` set to roughly twice the sensor range.
+- **`--admission probabilistic` does not scale:** it worked at 10 vehicles but rejected 37-42 % of honest senders at 150 vehicles (many vehicles in range means some always "missed" an object), so treat it as experimental.
+- Honest senders' ~6-7 % rejection is the start-up cost (every sender begins below the gate), all before the first trusted verdict.
+
+Fixes needed to get here: (1) a sender's own reputation no longer satisfies its own corroboration requirement; (2) the deferred ledger is keyed by the reported `object_id`, because SORT track ids flapped and every flap reset the 15 s grace clock; (3) the judge's own vehicle counts as ego-known; (4) `mmcooper_fuse` clustering and peer corroboration replace `object_id` matching; (5) all detections are dead-reckoned to a common instant, and an unmatched sender object within 6 m of an unmatched judge detection is paired with it; (6) the simulator's heading (a math angle) is decoded as the compass bearing the codec assumed; (7) the phantom reports its attacker's speed and heading, and SORT uses the real flush interval.
 
 **Factor isolation**
 
-- **`trust_clean_n10` vs `trust_noise_n10`:** isolates the cost of *honest sensor error*.
-- **`trust_clean_n10` vs `trust_phantom_n10` / `trust_spoof_n10`:** isolates the effect of a *deliberately untrustworthy sender*.
-- Radio metrics (PDR, AoI) are unchanged by the trust layer; `analysis/compute_trusted_pdr.py` reports PDR restricted to messages the judge trusted.
+- **Periodic vs Greedy_v2:** isolates **scheduler** (fixed vs adaptive).
+- **Greedy_v2 vs HybridSDSM_v2:** isolates **object selection** (same scheduler).
+
+Scheduler logic is **ETSI TS 103 324 / TS 102 687–inspired**, not a conformance certification. See comments in `src/RosSDSMApp.cc` (`evaluateV2Schedule`).
 
 ---
 
@@ -299,8 +359,9 @@ Includes `avg_latency` / `p95_latency` from **`simTime − BSM envelope timestam
 5. **`num_vehicles`** may be **< requested N**; always use metadata for fair normalization.
 6. **Single-scenario / seed** until you publish multi-seed CIs.
 7. **`trust_sdsm_v2` has no Layer 1.** Local per-object confidence is hardcoded to `1.0`; there is no simulated sensor model, so the judge rests on cross-agent checks only.
-8. **`trust_sdsm_v2` has no peer-witness corroboration.** Matching is by reported `object_id` against the judge's own view, not CPX-Mono's multi-sender spatial clustering (`mmcooper_fuse`), so a third vehicle cannot back up an honest report.
+8. **`trust_sdsm_v2` clusters on aged beacon positions.** The fusion expects sub-metre agreement between views; this sim's views are dead-reckoned beacon positions (no per-object capture time on the wire), so a few percent of honest reports fail to cluster with the judge and rely on peer corroboration.
 9. **Trust results are 10-vehicle, single-seed**, and not bit-reproducible across SUMO versions (1.12 vs 1.18 gave different traffic).
+10. **Strict admission drops real objects that only one vehicle senses.** A real object seen by a single vehicle is indistinguishable from a fabricated one to everybody else, so strict admits neither (see `trust_hidden_n10`). Non-V2X objects such as pedestrians, cyclists, and occluded vehicles are exactly the case sensor sharing exists for. Mitigation: `--admission strict_unverified` exposes them as an "unverified" class instead of dropping them (see validation); not implemented: crediting senders whose unique sightings are later confirmed once another vehicle comes in range.
 
 ---
 
@@ -413,11 +474,10 @@ peers corroborate it. See
 `sdsm_trust_perception/global_trust_perception/pipeline/sdsm_codec.py`'s
 module docstring for the full list of what this sim's wire format can and
 cannot supply, and `global_trust_perception/pipeline/trustworthy_perception.py`'s
-docstring for what
-was and wasn't ported from CPX-Mono (notably: matching a judge's own report
-to a sender's is done by the reported `object_id`, which this sim already
-uses as a stable per-vehicle identity, rather than by CPX-Mono's spatial WBF
-clustering, which wasn't ported).
+docstring for what was and wasn't ported from CPX-Mono. Matching and peer
+corroboration use CPX-Mono's `mmcooper_fuse` spatial clustering (ported into
+`global_trust_perception/mmcooper_fuse/`); the phase-2 display fusion and the
+Foxglove visualizers were not ported.
 
 ```bash
 cd ros2_ws && colcon build && source install/setup.bash

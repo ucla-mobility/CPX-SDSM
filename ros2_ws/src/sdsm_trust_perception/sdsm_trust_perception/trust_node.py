@@ -103,28 +103,65 @@ class _EgoState:
         self.headings: list = []
         self.scores: list = []
         self.labels: list = []
-        self.object_ids: list = []
         self.equipment: int = 0
+        self._raw_positions: list = []
+        self._velocities: list = []
+        self._send_time: float = 0.0
+        self._last_xy = None
+        self._last_t = None
+        self._self_heading: float = 360.0
+        self._self_vel = (0.0, 0.0)
 
-    def update_from(self, msg) -> None:
-        self.positions = codec.get_global_positions_of(msg)
+    def update_from(self, msg, send_time: float) -> None:
+        raw = codec.get_global_positions_of(msg)
+        vel = codec.get_velocities_of(msg)
         self.dims = codec.get_dims_of(msg)
         self.headings = codec.get_headings_of(msg)
         self.scores = codec.get_local_scores_of(msg)
         self.labels = codec.get_labels_of(msg)
-        self.object_ids = codec.get_object_ids_of(msg)
         self.equipment = codec.get_equipment_type_of(msg)
+
+        # The judge's own vehicle is ego-known too. Its velocity and heading
+        # come from its own motion between TXs (the wire carries none for the
+        # sender); heading is kept while stationary.
+        x, y, _ = codec.ref_pos_of(msg)
+        if self._last_xy is not None and send_time > self._last_t:
+            dx, dy = x - self._last_xy[0], y - self._last_xy[1]
+            dt = send_time - self._last_t
+            self._self_vel = (dx / dt, dy / dt)
+            if math.hypot(dx, dy) > 0.1:
+                self._self_heading = codec.bearing_deg(dx, dy)
+        self._last_xy = (x, y)
+        self._last_t = send_time
+        me = codec.self_object_of(msg, self._self_heading)
+        self._raw_positions = raw + [me['position']]
+        self._velocities = list(vel) + [self._self_vel]
+        self.dims.append(me['dims'])
+        self.headings.append(me['heading'])
+        self.scores.append(me['score'])
+        self.labels.append(me['label'])
+        self._send_time = send_time
+        self.align_to(send_time)
+
+    def align_to(self, t_ref: float) -> None:
+        """Dead-reckon the held snapshot to the bucket's common instant."""
+        self.positions = codec.advance_positions(
+            self._raw_positions, self._velocities, t_ref - self._send_time)
 
 
 class _JudgeState:
     """Everything one judging node's trust view needs, kept between flushes."""
 
     def __init__(self, judge_id: int, db_path: str, flush_hz: float, deadline_s: float,
-                 now):
+                 now, admission: str = 'tiered', contradiction_persist: int = 1,
+                 opportunity_range_m: float = 150.0):
         self.judge_id = judge_id
         self.reputation_db = PersistentReputationTracker(db_path)
         self.engine = TrustEngine(self.reputation_db, flush_hz=flush_hz,
-                                  deadline_s=deadline_s, now=now)
+                                  deadline_s=deadline_s, now=now, admission=admission,
+                                  contradiction_persist=contradiction_persist,
+                                  opportunity_range_m=opportunity_range_m)
+        self.flush_dt = 1.0 / flush_hz
         self.trackers: dict[int, Sort] = {}   # sender_node -> Sort
         self.ego = _EgoState()
         self.current_bucket: Optional[int] = None
@@ -135,7 +172,7 @@ class _JudgeState:
     def sort_for(self, sender_node: int) -> Sort:
         trk = self.trackers.get(sender_node)
         if trk is None:
-            trk = Sort()
+            trk = Sort(dt=self.flush_dt)
             self.trackers[sender_node] = trk
         return trk
 
@@ -153,6 +190,9 @@ class TrustPerceptionNode(Node):
         self.declare_parameter('flush_interval_s', _DEFAULT_FLUSH_INTERVAL_S)
         self.declare_parameter('deferred_deadline_s', T_DEADLINE_S)
         self.declare_parameter('db_dir', _default_db_dir())
+        self.declare_parameter('admission', 'tiered')   # 'tiered' | 'probabilistic' | 'strict_unverified'
+        self.declare_parameter('contradiction_persist', 1)
+        self.declare_parameter('opportunity_range_m', 150.0)
 
         events_topic = self.get_parameter('events_topic').value
         verdicts_topic = self.get_parameter('verdicts_topic').value
@@ -161,6 +201,9 @@ class TrustPerceptionNode(Node):
             raise ValueError(f'flush_interval_s={self.flush_interval_s} must be > 0')
         self.deferred_deadline_s = float(self.get_parameter('deferred_deadline_s').value)
         self.db_dir = str(self.get_parameter('db_dir').value)
+        self.admission = str(self.get_parameter('admission').value)
+        self.contradiction_persist = int(self.get_parameter('contradiction_persist').value)
+        self.opportunity_range_m = float(self.get_parameter('opportunity_range_m').value)
         os.makedirs(self.db_dir, exist_ok=True)
 
         self._judges: dict[int, _JudgeState] = {}
@@ -190,7 +233,10 @@ class TrustPerceptionNode(Node):
         if js is None:
             db_path = os.path.join(self.db_dir, f'historical_reputations_{judge_id}.db')
             js = _JudgeState(judge_id, db_path, flush_hz=1.0 / self.flush_interval_s,
-                             deadline_s=self.deferred_deadline_s, now=self._now)
+                             deadline_s=self.deferred_deadline_s, now=self._now,
+                             admission=self.admission,
+                             contradiction_persist=self.contradiction_persist,
+                             opportunity_range_m=self.opportunity_range_m)
             self._judges[judge_id] = js
             self.get_logger().info(f'New judge node={judge_id}, db={db_path}')
         return js
@@ -247,8 +293,12 @@ class TrustPerceptionNode(Node):
             else:
                 tx_event = event  # last TX this bucket wins
 
+        # Every detection is dead-reckoned to this one instant (the bucket's
+        # end) so views taken up to a bucket apart can be clustered spatially.
+        t_ref = (js.current_bucket + 1) * self.flush_interval_s
         if tx_event is not None:
-            js.ego.update_from(tx_event.sdsm)
+            js.ego.update_from(tx_event.sdsm, tx_event.sim_time)
+        js.ego.align_to(t_ref)
 
         for sender_node, event in rx_by_sender.items():
             msg = event.sdsm
@@ -257,6 +307,8 @@ class TrustPerceptionNode(Node):
             dims = codec.get_dims_of(msg)
             headings = codec.get_headings_of(msg)
             velocities = codec.get_velocities_of(msg)
+            positions = codec.advance_positions(
+                positions, velocities, t_ref - (event.sim_time - event.latency))
 
             xy = (np.array([(p[0], p[1]) for p in positions], dtype=float)
                   if n else np.empty((0, 2)))
@@ -310,7 +362,7 @@ class TrustPerceptionNode(Node):
                 classes_by_agent=labels_by_agent if labels_by_agent else None,
                 ego_classes=js.ego.labels if js.ego.labels else None,
                 object_ids_by_agent=object_ids_by_agent if object_ids_by_agent else None,
-                ego_object_ids=js.ego.object_ids if js.ego.object_ids else None,
+                ego_ref_pos=tuple(js.ego.positions[-1][:2]) if js.ego.positions else None,
             )
         except Exception:
             self.get_logger().error(

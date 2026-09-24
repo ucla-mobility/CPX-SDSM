@@ -39,3 +39,28 @@ def test_round_trip_offset():
         # generously (a few cm) rather than asserting exact equality.
         assert abs(x - x_m) < 0.05, f'x: got {x}, want {x_m}'
         assert abs(y - y_m) < 0.05, f'y: got {y}, want {y_m}'
+
+
+def _msg_with_objects(*objs):
+    """Stand-in message: each obj is (speed_raw, heading_raw)."""
+    common = [SimpleNamespace(det_obj_common=SimpleNamespace(speed=s, heading=h))
+              for s, h in objs]
+    return SimpleNamespace(objects=common)
+
+
+def test_heading_math_to_compass():
+    # RosSDSMApp writes atan2(dy, dx) in degrees: 0 = east, 90 = north (math).
+    east = round(0.0 / codec.HEADING_UNIT_DEG)
+    north = round(90.0 / codec.HEADING_UNIT_DEG)
+    msg = _msg_with_objects((50, east), (50, north), (50, codec.HEADING_UNAVAILABLE))
+    east_c, north_c, unavailable = codec.get_headings_of(msg)
+    assert abs(east_c - 90.0) < 0.05      # compass: east = 90
+    assert abs(north_c - 0.0) < 0.05 or abs(north_c - 360.0) < 0.05
+    assert unavailable == 360.0
+
+
+def test_velocity_follows_math_heading():
+    speed_raw = round(10.0 / codec.SPEED_UNIT_MS)          # 10 m/s
+    north = round(90.0 / codec.HEADING_UNIT_DEG)
+    (vx, vy), = codec.get_velocities_of(_msg_with_objects((speed_raw, north)))
+    assert abs(vx) < 0.05 and abs(vy - 10.0) < 0.05

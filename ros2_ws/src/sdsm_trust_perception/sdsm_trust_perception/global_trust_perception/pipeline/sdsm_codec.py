@@ -222,11 +222,29 @@ def get_labels_of(msg: Message) -> list[int]:
     return [int(obj.det_obj_common.obj_type) for obj in msg.objects]
 
 
+def _math_heading_deg(raw: int) -> float:
+    """Wire heading -> math angle in degrees (0 = +x/east, counter-clockwise).
+
+    RosSDSMApp fills DetectedObjectCommonData.heading with atan2(dy, dx) of the
+    sim frame, i.e. a MATH angle, even though J3224/J2735 define the field as a
+    compass bearing (0 = north, clockwise). This decoder is the one place that
+    reinterprets it, so everything downstream can rely on the J2735 meaning.
+    """
+    return raw * HEADING_UNIT_DEG
+
+
 def get_headings_of(msg: Message) -> list[float]:
-    """Decode per-object heading in degrees (0=North, clockwise). The
-    HEADING_UNAVAILABLE sentinel (28800) is passed through as 360.0, same
-    convention CPX-Mono's codec uses, so downstream treats it as axis-aligned."""
-    return [float(obj.det_obj_common.heading) * HEADING_UNIT_DEG for obj in msg.objects]
+    """Decode per-object heading as a J2735 compass bearing in degrees
+    (0 = North, clockwise), converted from the sim's math-angle heading (see
+    _math_heading_deg). The HEADING_UNAVAILABLE sentinel (28800) is passed
+    through as 360.0, same convention CPX-Mono's codec uses, so downstream
+    treats it as axis-aligned."""
+    out = []
+    for obj in msg.objects:
+        raw = int(obj.det_obj_common.heading)
+        out.append(360.0 if raw == HEADING_UNAVAILABLE
+                   else (90.0 - _math_heading_deg(raw)) % 360.0)
+    return out
 
 
 def get_velocities_of(msg: Message) -> list[tuple[float, float]]:
@@ -241,8 +259,8 @@ def get_velocities_of(msg: Message) -> list[tuple[float, float]]:
             velocities.append((0.0, 0.0))
             continue
         speed_ms = speed_raw * SPEED_UNIT_MS
-        heading_rad = math.radians(h * HEADING_UNIT_DEG)
-        velocities.append((speed_ms * math.sin(heading_rad), speed_ms * math.cos(heading_rad)))
+        heading_rad = math.radians(_math_heading_deg(h))
+        velocities.append((speed_ms * math.cos(heading_rad), speed_ms * math.sin(heading_rad)))
     return velocities
 
 
@@ -255,6 +273,48 @@ def get_local_scores_of(msg: Message) -> list[float]:
 def local_score_of(msg: Message) -> float:
     """No frame-level local certainty exists on this wire -- always neutral."""
     return 1.0
+
+
+def advance_positions(positions: list, velocities: list, dt: float) -> list:
+    """Dead-reckon (x, y, z) positions forward dt seconds along (vx, vy) m/s.
+
+    Detections from different messages are snapshots taken at different
+    instants; before spatial clustering they must describe the same instant,
+    or two honest views of one moving car disagree by speed * skew (metres).
+    dt is clipped to [0, 2] s so a stale snapshot cannot be extrapolated far.
+    """
+    dt = min(max(dt, 0.0), 2.0)
+    return [(p[0] + v[0] * dt, p[1] + v[1] * dt, p[2])
+            for p, v in zip(positions, velocities)]
+
+
+# Every simulated vehicle is the same passenger car (RosSDSMApp reports
+# width 180 cm x length 450 cm for each object); height is not on the wire.
+SELF_DIMS_M = (1.8, 4.5, 1.5)
+
+
+def bearing_deg(dx: float, dy: float) -> float:
+    """J2735 heading (0 = North, clockwise) of a displacement in the sim frame."""
+    return math.degrees(math.atan2(dx, dy)) % 360.0
+
+
+def self_object_of(msg: Message, heading_deg: float) -> dict:
+    """The judge's OWN vehicle as an ego-known object, from its own TX.
+
+    A judge only lists what it perceives, never itself, so an honest sender
+    that reports the judge would look like an uncorroborated ghost. The judge
+    is the authority on its own existence and pose, so it counts as ground
+    truth for that one object. heading_deg is the judge's own bearing (the
+    wire carries none for the sender), 360.0 when unknown.
+    """
+    x, y, z = ref_pos_of(msg)
+    return {
+        'position': (x, y, z),
+        'dims': SELF_DIMS_M,
+        'heading': heading_deg,
+        'score': 1.0,
+        'label': OBJ_TYPE_VEHICLE,
+    }
 
 
 def get_equipment_type_of(msg: Message) -> int:

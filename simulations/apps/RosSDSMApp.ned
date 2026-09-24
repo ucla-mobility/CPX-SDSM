@@ -74,6 +74,15 @@ simple RosSDSMApp extends DemoBaseApplLayer
         string attackType             = default("phantom"); // "phantom" = fabricate an extra object nobody else
                                                              // sees; "spoof" = teleport a real reported object
         double spoofJumpDistance @unit(m) = default(150m);  // "spoof" attacker's reported displacement
+        // Sensor-only objects: real, static, NON-broadcasting obstacles (think parked
+        // vehicles, pedestrians) that a vehicle only knows about if its own sensor
+        // reaches them. Vehicles with nodeIndex % hiddenHostPeriod == 0 each create one
+        // near where they first send (up to hiddenObjects); any vehicle within
+        // sensorRange of one reports it, so early on only the host sees it.
+        int hiddenObjects = default(0);
+        int hiddenHostPeriod = default(2);
+        double sensorRange @unit(m) = default(50m);
+        double phantomOffsetDistance @unit(m) = default(0m);  // >0: fixed "phantom" distance from its sender (else random 20-80 m)
         bool   attackerPureMode       = default(false);     // true = attacker reports ONLY its fabrication
                                                              // (no legitimate objects), so its reputation
                                                              // can't climb from honest traffic and self-vouch

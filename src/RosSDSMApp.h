@@ -141,6 +141,11 @@ private:
     double attackerFraction_ = 0.0;
     std::string attackType_ = "phantom";
     double spoofJumpDistance_ = 150.0;
+    double phantomOffsetDistance_ = 0.0;
+    int hiddenObjects_ = 0;
+    int hiddenHostPeriod_ = 2;
+    double sensorRange_ = 50.0;
+    bool hiddenCreated_ = false;
     bool attackerPureMode_ = false;
     bool isAttacker_ = false;
     // Fixed, attacker-relative offset for the "phantom" object, chosen once so it moves
@@ -337,6 +342,8 @@ private:
     static uint64_t s_redundantCount_;
     static uint64_t s_redundantTotal_;
     static long s_nextMessageId_;
+    struct HiddenObject { int id; double x; double y; };
+    static std::vector<HiddenObject> s_hiddenObjects_;
 
     static std::ofstream* s_vehicleSummaryLog_;
     static bool s_vehicleSummaryHeaderWritten_;
