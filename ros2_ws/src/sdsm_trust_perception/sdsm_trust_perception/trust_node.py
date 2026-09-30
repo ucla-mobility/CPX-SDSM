@@ -60,8 +60,13 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
-from sdsm_trust_interfaces.msg import ReceivedSdsm, TrustVerdict
+from sdsm_trust_interfaces.msg import CautionMap as CautionMapMsg, ReceivedSdsm, TrustVerdict
 from sdsm_trust_perception.global_trust_perception.pipeline import sdsm_codec as codec
+from sdsm_trust_perception.global_trust_perception.pipeline.caution_map import (
+    CAUTION_MARGIN_M,
+    CautionMap,
+    Sightings,
+)
 from sdsm_trust_perception.global_trust_perception.pipeline.persistent_reputation_tracker import (
     BATCH_SIZE,
     PersistentReputationTracker,
@@ -154,13 +159,25 @@ class _JudgeState:
 
     def __init__(self, judge_id: int, db_path: str, flush_hz: float, deadline_s: float,
                  now, admission: str = 'tiered', contradiction_persist: int = 1,
-                 opportunity_range_m: float = 150.0):
+                 opportunity_range_m: float = 150.0, strike_penalty: float = 0.0,
+                 strike_missed_min: float = 2.0, peer_support_cap: float = 1.0,
+                 strike_missed_frac: float = 0.0, support_threshold: float = None,
+                 strike_use_kinematic: bool = False, report_cap: int = 0,
+                 admit_judge_confirmed: bool = False, caution: Optional[CautionMap] = None):
         self.judge_id = judge_id
+        self.caution = caution
         self.reputation_db = PersistentReputationTracker(db_path)
         self.engine = TrustEngine(self.reputation_db, flush_hz=flush_hz,
                                   deadline_s=deadline_s, now=now, admission=admission,
                                   contradiction_persist=contradiction_persist,
-                                  opportunity_range_m=opportunity_range_m)
+                                  opportunity_range_m=opportunity_range_m,
+                                  strike_penalty=strike_penalty, strike_missed_min=strike_missed_min,
+                                  peer_support_cap=peer_support_cap,
+                                  strike_missed_frac=strike_missed_frac,
+                                  support_threshold=support_threshold,
+                                  strike_use_kinematic=strike_use_kinematic,
+                                  report_cap=report_cap,
+                                  admit_judge_confirmed=admit_judge_confirmed)
         self.flush_dt = 1.0 / flush_hz
         self.trackers: dict[int, Sort] = {}   # sender_node -> Sort
         self.ego = _EgoState()
@@ -193,6 +210,19 @@ class TrustPerceptionNode(Node):
         self.declare_parameter('admission', 'tiered')   # 'tiered' | 'probabilistic' | 'strict_unverified'
         self.declare_parameter('contradiction_persist', 1)
         self.declare_parameter('opportunity_range_m', 150.0)
+        self.declare_parameter('strike_penalty', 0.0)
+        self.declare_parameter('strike_missed_min', 2.0)
+        self.declare_parameter('peer_support_cap', 1.0)
+        self.declare_parameter('strike_missed_frac', 0.0)
+        self.declare_parameter('support_threshold', 0.0)          # 0 = default (1.0)
+        self.declare_parameter('strike_use_kinematic', False)
+        self.declare_parameter('report_cap', 0)
+        self.declare_parameter('admit_judge_confirmed', False)
+        # strict_unverified only: publish unverified objects as caution markers (potential
+        # critical vehicles with a larger keep-out) on caution_topic.
+        self.declare_parameter('caution_map', False)
+        self.declare_parameter('caution_topic', '/veins/caution_map')
+        self.declare_parameter('caution_margin_m', CAUTION_MARGIN_M)
 
         events_topic = self.get_parameter('events_topic').value
         verdicts_topic = self.get_parameter('verdicts_topic').value
@@ -204,6 +234,19 @@ class TrustPerceptionNode(Node):
         self.admission = str(self.get_parameter('admission').value)
         self.contradiction_persist = int(self.get_parameter('contradiction_persist').value)
         self.opportunity_range_m = float(self.get_parameter('opportunity_range_m').value)
+        self.strike_penalty = float(self.get_parameter('strike_penalty').value)
+        self.strike_missed_min = float(self.get_parameter('strike_missed_min').value)
+        self.peer_support_cap = float(self.get_parameter('peer_support_cap').value)
+        self.strike_missed_frac = float(self.get_parameter('strike_missed_frac').value)
+        _st = float(self.get_parameter('support_threshold').value)
+        self.support_threshold = _st if _st > 0.0 else None
+        self.strike_use_kinematic = bool(self.get_parameter('strike_use_kinematic').value)
+        self.report_cap = int(self.get_parameter('report_cap').value)
+        self.admit_judge_confirmed = bool(self.get_parameter('admit_judge_confirmed').value)
+        self.caution_map = bool(self.get_parameter('caution_map').value)
+        self.caution_margin_m = float(self.get_parameter('caution_margin_m').value)
+        if self.caution_map and self.admission != 'strict_unverified':
+            raise ValueError("caution_map needs admission='strict_unverified'")
         os.makedirs(self.db_dir, exist_ok=True)
 
         self._judges: dict[int, _JudgeState] = {}
@@ -212,6 +255,9 @@ class TrustPerceptionNode(Node):
             ReceivedSdsm, events_topic, self.on_event, 200,
         )
         self.pub = self.create_publisher(TrustVerdict, verdicts_topic, 200)
+        self.caution_pub = (self.create_publisher(
+            CautionMapMsg, str(self.get_parameter('caution_topic').value), 200)
+            if self.caution_map else None)
 
         self.get_logger().info(
             f'trust_perception_node up: {events_topic} -> {verdicts_topic}, '
@@ -236,7 +282,17 @@ class TrustPerceptionNode(Node):
                              deadline_s=self.deferred_deadline_s, now=self._now,
                              admission=self.admission,
                              contradiction_persist=self.contradiction_persist,
-                             opportunity_range_m=self.opportunity_range_m)
+                             opportunity_range_m=self.opportunity_range_m,
+                             strike_penalty=self.strike_penalty,
+                             strike_missed_min=self.strike_missed_min,
+                             peer_support_cap=self.peer_support_cap,
+                             strike_missed_frac=self.strike_missed_frac,
+                             support_threshold=self.support_threshold,
+                             strike_use_kinematic=self.strike_use_kinematic,
+                             report_cap=self.report_cap,
+                             admit_judge_confirmed=self.admit_judge_confirmed,
+                             caution=(CautionMap(margin_m=self.caution_margin_m)
+                                      if self.caution_map else None))
             self._judges[judge_id] = js
             self.get_logger().info(f'New judge node={judge_id}, db={db_path}')
         return js
@@ -270,6 +326,7 @@ class TrustPerceptionNode(Node):
         js.frame_count += 1
 
         positions_by_agent: dict[int, list] = {}
+        velocities_by_agent: dict[int, list] = {}
         dims_by_agent: dict[int, list] = {}
         headings_by_agent: dict[int, list] = {}
         labels_by_agent: dict[int, list] = {}
@@ -317,6 +374,7 @@ class TrustPerceptionNode(Node):
             tracks = js.sort_for(sender_node).update(xy, vel, dim_arr)
 
             positions_by_agent[sender_node] = positions
+            velocities_by_agent[sender_node] = velocities
             dims_by_agent[sender_node] = dims
             headings_by_agent[sender_node] = headings
             labels_by_agent[sender_node] = codec.get_labels_of(msg)
@@ -376,9 +434,47 @@ class TrustPerceptionNode(Node):
             js.reputation_db.record(source_id, s.r_new, js.frame_count, s.risk_persist)
             self._publish_verdict(js, s, raw_msg_by_agent[s.agent_id],
                                   sim_time_by_agent[s.agent_id])
+        if js.caution is not None and js.ego.positions:
+            self._publish_caution(js, stats, positions_by_agent, velocities_by_agent,
+                                  object_ids_by_agent, t_ref)
 
         if js.frame_count % BATCH_SIZE == 0:
             js.reputation_db.flush(js.frame_count)
+
+    def _publish_caution(self, js: _JudgeState, stats, pos_by, vel_by, oid_by, t_ref: float) -> None:
+        """Fold this flush into the judge's caution layer and publish its markers."""
+        def gather(pairs) -> Sightings:
+            if not pairs:
+                return Sightings.empty()
+            return Sightings(
+                np.array([a for a, _ in pairs], dtype=int),
+                np.array([int(oid_by[a][i]) for a, i in pairs], dtype=int),
+                np.array([(pos_by[a][i][0], pos_by[a][i][1]) for a, i in pairs], dtype=float),
+                np.array([(vel_by[a][i][0], vel_by[a][i][1]) for a, i in pairs], dtype=float))
+
+        conf = gather([(s.agent_id, i) for s in stats for i in s.admitted])
+        unv = gather([(s.agent_id, i) for s in stats for i in s.unverified])
+        seen = (np.array([(p[0], p[1]) for p in js.ego.positions[:-1]], dtype=float)
+                if len(js.ego.positions) > 1 else None)
+        fm = js.caution.update(t_ref, js.ego.positions[-1][:2], js.ego._self_vel, conf, unv, seen)
+
+        out = CautionMapMsg()
+        out.judge_node = js.judge_id
+        out.sim_time = t_ref
+        out.advisory = fm.advisory
+        out.n_confirmed_critical = fm.n_critical_confirmed
+        out.sender_node = [m.sender for m in fm.markers]
+        out.object_id = [m.object_id for m in fm.markers]
+        out.x = [m.x for m in fm.markers]
+        out.y = [m.y for m in fm.markers]
+        out.vx = [m.vx for m in fm.markers]
+        out.vy = [m.vy for m in fm.markers]
+        out.keepout_m = [m.keepout_m for m in fm.markers]
+        out.critical = [m.critical for m in fm.markers]
+        out.ttc_s = [m.ttc_s for m in fm.markers]
+        out.dist_m = [m.dist_m for m in fm.markers]
+        out.criticality = [m.criticality for m in fm.markers]
+        self.caution_pub.publish(out)
 
     def _publish_verdict(self, js: _JudgeState, s: FrameStats, msg, sim_time: float) -> None:
         out = TrustVerdict()
@@ -396,6 +492,8 @@ class TrustPerceptionNode(Node):
         out.verdict = [_VERDICT_TO_WIRE[v] for v in s.verdict]
         admitted_set = set(s.admitted)
         out.admitted = [i in admitted_set for i in range(len(s.verdict))]
+        unverified_set = set(s.unverified)
+        out.unverified = [i in unverified_set for i in range(len(s.verdict))]
         self.pub.publish(out)
 
         if s.trusted:

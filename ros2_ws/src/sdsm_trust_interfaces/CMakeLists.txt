@@ -12,6 +12,7 @@ find_package(sdsm_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ReceivedSdsm.msg"
   "msg/TrustVerdict.msg"
+  "msg/CautionMap.msg"
   DEPENDENCIES sdsm_msgs
 )
 

@@ -148,6 +148,7 @@ NEAR_REPORT_M = 10.0           # a witness reporting anything this close DID see
 KDS_IMPLAUSIBLE = 0.3          # kinematic score below this = physically implausible
 P_ADMIT = 0.4                  # minimum belief to admit an uncorroborated object
 LIAR_EWMA_ALPHA = 0.1          # per-flush weight of the newest frame in false_freq
+MAX_STRIKES_PER_FLUSH = 3         # strikes one sender can take in a single flush
 LIAR_FREQ = 0.5                # false_freq at/above this = consistently false sender
 
 # Fallback pairing after the fusion: an unmatched sender detection within this
@@ -229,6 +230,7 @@ class FrameStats(NamedTuple):
     # 'strict_unverified' admission only: objects from a trusted sender that nobody confirms
     # and nobody contradicts (a flag for the consumer, NOT in `admitted`)
     unverified: tuple = ()
+    strikes: int = 0   # strict_unverified with strike_penalty: strikes taken this flush
 
 
 class _Gate(NamedTuple):
@@ -262,7 +264,15 @@ class TrustEngine:
                  high_trust: float = HIGH_TRUST,
                  admission: str = 'tiered',
                  contradiction_persist: int = 1,
-                 opportunity_range_m: float = OPPORTUNITY_RANGE_M):
+                 opportunity_range_m: float = OPPORTUNITY_RANGE_M,
+                 strike_penalty: float = 0.0,
+                 strike_missed_min: float = 2.0,
+                 peer_support_cap: float = 1.0,
+                 strike_missed_frac: float = 0.0,
+                 support_threshold: float = None,
+                 strike_use_kinematic: bool = False,
+                 report_cap: int = 0,
+                 admit_judge_confirmed: bool = False):
         self._now = now
         # Reputation at/above which ALL of a sender's objects are admitted without
         # corroboration (optimistic tier). Above 1.0 disables that tier, so every
@@ -282,10 +292,23 @@ class TrustEngine:
         # consecutive flushes (1 = immediately). Absent-witness evidence is noisy
         # (radio loss, timing), so a blip should not reject a real object.
         self._persist = max(1, int(contradiction_persist))
-        self._streaks: dict[int, dict] = {}
+        self._streaks: dict = {}
         # How close a witness must be to an object to count as able to see it; set
         # this to the sensors' real range (a witness beyond it cannot contradict).
         self._opp_range = float(opportunity_range_m)
+        # Reputation taken per strike (a persistent, strongly contradicted object),
+        # NOT divided by how many honest objects the sender also reports, so a
+        # mixed attacker cannot dilute a proven lie away. 0 disables. Strong = at
+        # least strike_missed_min of witness weight missed it, or implausible motion.
+        self._strike = float(strike_penalty)
+        self._strike_missed_min = float(strike_missed_min)
+        # Also require this FRACTION of the witness weight in range to have missed the
+        # object. A phantom is missed by nearly everyone nearby, a real object only by a
+        # few (radio loss), so the fraction stays meaningful as density grows while an
+        # absolute count does not. 0 = ignore.
+        self._strike_missed_frac = float(strike_missed_frac)
+        # Upper bound on the corroboration mass any ONE peer can contribute.
+        self._peer_cap = float(peer_support_cap)
         if flush_hz <= 0.0:
             raise ValueError(f'flush_hz={flush_hz} must be > 0')
         self._flush_hz = float(flush_hz)
@@ -298,7 +321,23 @@ class TrustEngine:
         if deadline_s <= 0.0:
             raise ValueError(f'deadline_s={deadline_s} must be > 0')
         self._deadline_flushes = max(1, round(deadline_s * self._flush_hz))
-        self._pending = PendingVerdicts(self._deadline_flushes)
+        # Peer reputation mass needed to corroborate an object (None = the module default
+        # SUPPORT_THRESHOLD_THETA). With peer_support_cap it fixes the minimum number of
+        # independent peers: cap 0.6 and threshold 1.5 need three, so one or two colluders
+        # cannot corroborate each other's fake.
+        self._theta = support_threshold
+        self._pending = PendingVerdicts(self._deadline_flushes, support_threshold)
+        # Whether implausible motion (low kinematic score) also counts toward a strike.
+        # Off by default: at high density it fires on honest senders, unlike the
+        # absence evidence.
+        self._strike_use_kds = bool(strike_use_kinematic)
+        # Objects per message at which senders truncate their list (0 = unknown/none). A
+        # sender at the cap only demonstrably covers objects nearer than its farthest
+        # reported one, so it is not counted as having MISSED anything farther out.
+        self._report_cap = int(report_cap)
+        # Admit an object the judge itself sees (matched with its own detection) even while
+        # its sender is still failing the gate: the judge's sighting is independent evidence.
+        self._admit_judge = bool(admit_judge_confirmed)
         self._frame_idx = 0
         self._pending_risk_l: dict[int, tuple[float, float]] = {}
 
@@ -355,18 +394,18 @@ class TrustEngine:
                 tracker.seed(*pending)
         return tracker.update(R_old)
 
-    def _persistent(self, agent_id, keys, contradicted):
+    def _persistent(self, agent_id, keys, contradicted, tag='c'):
         """Apply the persistence rule: contradicted only after `_persist` consecutive
         flushes for the same object key (no keys -> no smoothing)."""
         if self._persist <= 1 or keys is None:
             return list(contradicted)
-        prev = self._streaks.get(agent_id, {})
+        prev = self._streaks.get((tag, agent_id), {})
         cur, out = {}, []
         for key, c in zip(keys, contradicted):
             n = prev.get(key, 0) + 1 if c else 0
             cur[key] = n
             out.append(n >= self._persist)
-        self._streaks[agent_id] = cur
+        self._streaks[(tag, agent_id)] = cur
         return out
 
     def _object_beliefs(self, agent_id, other_positions, kds, corroborated,
@@ -382,19 +421,26 @@ class TrustEngine:
         its motion is implausible (kds < KDS_IMPLAUSIBLE); an object nobody
         could have seen is never contradicted.
         """
-        beliefs, contradicted = [], []
+        beliefs, contradicted, missed_all, total_all = [], [], [], []
         prior = min(max(R_old, 0.0), 1.0)
         for j, pos in enumerate(other_positions):
             if j in corroborated:
                 beliefs.append(1.0)
                 contradicted.append(False)
+                missed_all.append(0.0)
+                total_all.append(0.0)
                 continue
             reporters = cluster_of.get((agent_id, j), {})
             missed = 0.0
-            for w, wx, wy, wkey, wxy in witnesses:
-                if wkey == agent_id or wkey in reporters:
+            total = 0.0
+            for w, wx, wy, wkey, wxy, cov in witnesses:
+                if wkey == agent_id:
                     continue
-                if math.hypot(pos[0] - wx, pos[1] - wy) > self._opp_range:
+                dw = math.hypot(pos[0] - wx, pos[1] - wy)
+                if dw > self._opp_range or dw > cov:
+                    continue
+                total += w
+                if wkey in reporters:
                     continue
                 if len(wxy) and np.min(np.hypot(wxy[:, 0] - pos[0],
                                                 wxy[:, 1] - pos[1])) <= NEAR_REPORT_M:
@@ -402,7 +448,9 @@ class TrustEngine:
                 missed += w
             beliefs.append(prior * kds[j] * math.exp(-ABSENCE_K * missed))
             contradicted.append(missed >= CONTRADICTED_MISSED_MIN or kds[j] < KDS_IMPLAUSIBLE)
-        return beliefs, contradicted
+            missed_all.append(missed)
+            total_all.append(total)
+        return beliefs, contradicted, missed_all, total_all
 
     def process_frame(self,
                       positions_by_agent: dict,
@@ -522,6 +570,7 @@ class TrustEngine:
             {st.key: st.reliability for st in streams},
             {st.key: _row_or_default(st.scores, len(st.positions), 1.0) for st in streams},
             _EGO_KEY,
+            peer_cap=self._peer_cap,
         )
         _log.debug('Stage 2 [all]  ego + %d agents -> %d consensus clusters',
                    len(positions_by_agent), len(clusters))
@@ -536,12 +585,15 @@ class TrustEngine:
                     cluster_of[(key, det)] = c
             if ego_ref_pos is not None:
                 witnesses.append((1.0, ego_ref_pos[0], ego_ref_pos[1], _EGO_KEY,
-                                  _to_xy_array(ego_positions)))
+                                  _to_xy_array(ego_positions), math.inf))
             for aid, gi in gate_info.items():
                 ref = (ref_pos_by_agent or {}).get(aid)
                 if ref is not None and gi.passed:
-                    witnesses.append((gi.r_old, ref[0], ref[1], aid,
-                                      _to_xy_array(positions_by_agent[aid])))
+                    pa = positions_by_agent[aid]
+                    cov = math.inf
+                    if self._report_cap > 0 and len(pa) >= self._report_cap:
+                        cov = max(math.hypot(q[0] - ref[0], q[1] - ref[1]) for q in pa)
+                    witnesses.append((gi.r_old, ref[0], ref[1], aid, _to_xy_array(pa), cov))
 
         stats = []
         for agent_id, other_positions in positions_by_agent.items():
@@ -602,11 +654,11 @@ class TrustEngine:
             support_by_det = support.get(agent_id, {})
             corroborated = {
                 j for j in range(len(other_positions))
-                if j in matched_other or is_corroborated(support_by_det.get(j, 0.0))
+                if j in matched_other or is_corroborated(support_by_det.get(j, 0.0), self._theta)
             }
             uncorroborated = sum(
                 1 for j in other_only
-                if not is_corroborated(support_by_det.get(j, 0.0))
+                if not is_corroborated(support_by_det.get(j, 0.0), self._theta)
             )
             support_max = max((support_by_det.get(j, 0.0) for j in other_only), default=0.0)
 
@@ -662,20 +714,33 @@ class TrustEngine:
             p_obj, false_freq = (), self._false_freq.get(agent_id, 0.0)
             contradicted = []
             unverified = ()
+            strikes = 0
             if self._admission == 'strict_unverified':
-                p_list, contradicted = self._object_beliefs(
+                p_list, contradicted, missed_list, total_list = self._object_beliefs(
                     agent_id, other_positions, kds, corroborated, R_old,
                     cluster_of, witnesses)
                 p_obj = tuple(p_list)
                 raw_contra = contradicted
                 contradicted = self._persistent(agent_id, track_ids, raw_contra)
+                if self._strike > 0.0:
+                    raw_strong = [
+                        j not in corroborated and (
+                            (missed_list[j] >= self._strike_missed_min
+                             and missed_list[j] >= self._strike_missed_frac * total_list[j])
+                            or (self._strike_use_kds and kds[j] < KDS_IMPLAUSIBLE))
+                        for j in range(len(other_positions))]
+                    strong = self._persistent(agent_id, track_ids, raw_strong, tag='s')
+                    strikes = min(sum(strong), MAX_STRIKES_PER_FLUSH)
+                    if strikes:
+                        R_new = max(0.0, R_new - self._strike * strikes)
+                        self.reputations[agent_id] = R_new
                 if gate_passed:
                     unverified = tuple(
                         j for j in range(len(other_positions))
                         if j not in corroborated and not contradicted[j]
                         and (p_list[j] >= P_ADMIT or raw_contra[j]))
             if self._admission == 'probabilistic':
-                p_list, contradicted = self._object_beliefs(
+                p_list, contradicted, _missed, _total = self._object_beliefs(
                     agent_id, other_positions, kds, corroborated, R_old,
                     cluster_of, witnesses)
                 strike = 1.0 if any(contradicted) else 0.0
@@ -685,7 +750,10 @@ class TrustEngine:
                 p_obj = tuple(p_list)
                 trusted = gate_passed and false_freq < LIAR_FREQ
             if not trusted:
-                tier, admitted = 'reject', ()
+                if self._admit_judge:
+                    tier, admitted = 'probation', tuple(sorted(matched_other))
+                else:
+                    tier, admitted = 'reject', ()
             elif self._admission == 'probabilistic':
                 tier = 'probabilistic'
                 admitted = tuple(
@@ -717,7 +785,7 @@ class TrustEngine:
                 risk_persist=self._persistence[agent_id].risk_persist,
                 ledger=ledger_stats, tier=tier, admitted=admitted,
                 verdict=tuple(verdicts), matched_ego=tuple(sorted(matched_ego)),
-                p_obj=p_obj, false_freq=false_freq, unverified=unverified,
+                p_obj=p_obj, false_freq=false_freq, unverified=unverified, strikes=strikes,
             ))
         return stats
 

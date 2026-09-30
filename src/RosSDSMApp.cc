@@ -115,6 +115,7 @@ uint64_t RosSDSMApp::s_redundantCount_ = 0;
 uint64_t RosSDSMApp::s_redundantTotal_ = 0;
 long RosSDSMApp::s_nextMessageId_ = 0;
 std::vector<RosSDSMApp::HiddenObject> RosSDSMApp::s_hiddenObjects_;
+RosSDSMApp::SharedFake RosSDSMApp::s_sharedFake_;
 std::ofstream* RosSDSMApp::s_vehicleSummaryLog_ = nullptr;
 bool RosSDSMApp::s_vehicleSummaryHeaderWritten_ = false;
 std::mutex RosSDSMApp::s_vehicleSummaryMtx_;
@@ -369,6 +370,9 @@ void RosSDSMApp::initialize(int stage) {
         attackType_ = par("attackType").stdstringValue();
         spoofJumpDistance_ = par("spoofJumpDistance").doubleValue();
         phantomOffsetDistance_ = par("phantomOffsetDistance").doubleValue();
+        colludingPhantom_ = par("colludingPhantom").boolValue();
+        logLocalView_ = par("logLocalView").boolValue();
+        phantomFlickerPeriod_ = par("phantomFlickerPeriod").doubleValue();
         hiddenObjects_ = par("hiddenObjects").intValue();
         hiddenHostPeriod_ = std::max(1, static_cast<int>(par("hiddenHostPeriod").intValue()));
         sensorRange_ = par("sensorRange").doubleValue();
@@ -1397,12 +1401,25 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
     // targets the corroboration / deferred-ledger path, not the kinematic check. Uses a
     // sentinel id well outside any real nodeIndex_ range so it can never collide with (and
     // get corroborated by) an actual vehicle.
-    if (isAttacker_ && attackType_ == "phantom" && numObj < 32 && numObj < maxObjectsPerSdsm_) {
-        const int phantomId = 900000 + nodeIndex_;
+    const bool phantomVisible = phantomFlickerPeriod_ <= 0.0
+        || std::fmod(now, phantomFlickerPeriod_) < phantomFlickerPeriod_ / 2.0;
+    if (isAttacker_ && attackType_ == "phantom" && phantomVisible && numObj < 32 && numObj < maxObjectsPerSdsm_) {
+        int phantomId = 900000 + nodeIndex_;
         // Fixed offset chosen once in initialize() -- moves smoothly with the attacker
         // rather than teleporting to a new random spot every send (see phantomOffsetX_/Y_).
-        const double phantomX = pos.x + phantomOffsetX_;
-        const double phantomY = pos.y + phantomOffsetY_;
+        double phantomX = pos.x + phantomOffsetX_;
+        double phantomY = pos.y + phantomOffsetY_;
+        if (colludingPhantom_) {
+            // One shared static fake obstacle, fixed in the world by the first attacker to send.
+            if (!s_sharedFake_.set) {
+                s_sharedFake_.x = phantomX;
+                s_sharedFake_.y = phantomY;
+                s_sharedFake_.set = true;
+            }
+            phantomId = 950000;
+            phantomX = s_sharedFake_.x;
+            phantomY = s_sharedFake_.y;
+        }
 
         payload->setObj_type(numObj, 1);
         payload->setObject_id(numObj, phantomId);
@@ -1411,10 +1428,15 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
         payload->setOffset_z(numObj, 0);
         // Ghost moves rigidly with the attacker, so it reports the attacker's own speed and
         // heading like a real vehicle would (speed 0 on a moving object is trivially fake).
-        payload->setObj_speed(numObj, static_cast<int>(std::round(spd / 0.02)));
-        double phantomHdgDeg = std::fmod(heading * 180.0 / M_PI + 360.0, 360.0);
-        payload->setObj_heading(numObj, phantomHdgDeg <= 359.9875
-            ? static_cast<int>(std::round(phantomHdgDeg / 0.0125)) : 28800);
+        if (colludingPhantom_) {
+            payload->setObj_speed(numObj, 0);
+            payload->setObj_heading(numObj, 28800);
+        } else {
+            payload->setObj_speed(numObj, static_cast<int>(std::round(spd / 0.02)));
+            double phantomHdgDeg = std::fmod(heading * 180.0 / M_PI + 360.0, 360.0);
+            payload->setObj_heading(numObj, phantomHdgDeg <= 359.9875
+                ? static_cast<int>(std::round(phantomHdgDeg / 0.0125)) : 28800);
+        }
         payload->setObj_measurement_time_ms(numObj, static_cast<uint16_t>(static_cast<long>(now * 1000) & 0xFFFF));
         numObj++;
         payload->setNumObjects(numObj);
@@ -1488,7 +1510,33 @@ void RosSDSMApp::sendSdsmOnce(const std::string& overridePayload, const std::str
         msg << "{\"event\":\"TX\",\"node\":" << nodeIndex_
             << ",\"time\":" << simTime().dbl()
             << ",\"send_timestamp\":" << simTime().dbl()
-            << ",\"sdsm\":" << buildSdsmJson(payload) << "}";
+            << ",\"sdsm\":" << buildSdsmJson(payload);
+        if (logLocalView_) {
+            // Full local view: [id, x, y, speed, heading(rad, math angle)]; heading -999 = none.
+            char buf[160];
+            msg << ",\"local\":[";
+            bool firstLocal = true;
+            for (const auto& kv : neighborInfo_) {
+                if (now - kv.second.lastRxTime.dbl() > detectionMaxAge_) continue;
+                const double ldx = kv.second.x - pos.x, ldy = kv.second.y - pos.y;
+                if (std::sqrt(ldx * ldx + ldy * ldy) > detectionRange_) continue;
+                std::snprintf(buf, sizeof(buf), "%s[%d,%.1f,%.1f,%.2f,%.4f]", firstLocal ? "" : ",",
+                              kv.first, kv.second.x, kv.second.y, kv.second.speed, kv.second.heading);
+                msg << buf;
+                firstLocal = false;
+            }
+            if (hiddenObjects_ > 0 && !(isAttacker_ && attackerPureMode_)) {
+                for (const auto& h : s_hiddenObjects_) {
+                    if (std::hypot(h.x - pos.x, h.y - pos.y) > sensorRange_) continue;
+                    std::snprintf(buf, sizeof(buf), "%s[%d,%.1f,%.1f,0.00,-999]", firstLocal ? "" : ",",
+                                  h.id, h.x, h.y);
+                    msg << buf;
+                    firstLocal = false;
+                }
+            }
+            msg << "]";
+        }
+        msg << "}";
         sendToRos(msg.str());
     }
 }
@@ -1870,6 +1918,7 @@ void RosSDSMApp::openCsvLogs(const std::string& prefix, int runNumber) {
     s_rxDetailLogCounter_.store(0);
     s_nextMessageId_ = 0;
     s_hiddenObjects_.clear();
+    s_sharedFake_ = SharedFake();
     s_maxNodeIndexForMetadata = -1;
     s_sendIntervalForMetadata = -1.0;
     s_assocParsedTotal_.store(0);

@@ -1,0 +1,171 @@
+{
+ "configById": {
+  "3D!scene01": {
+   "layers": {
+    "1b7d4c90-2e55-4a11-9c3e-8f2a61d07c44": {
+     "visible": true,
+     "frameLocked": true,
+     "label": "Grid",
+     "instanceId": "1b7d4c90-2e55-4a11-9c3e-8f2a61d07c44",
+     "layerId": "foxglove.Grid",
+     "size": 120,
+     "divisions": 24,
+     "lineWidth": 1,
+     "color": "#3a3a3a",
+     "position": [
+      30,
+      -153,
+      -2.7
+     ],
+     "rotation": [
+      0,
+      0,
+      0
+     ],
+     "order": 1
+    }
+   },
+   "cameraState": {
+    "perspective": false,
+    "distance": 85,
+    "phi": 0,
+    "thetaOffset": 0,
+    "targetOffset": [
+     0,
+     0,
+     0
+    ],
+    "target": [
+     30,
+     -153,
+     0
+    ],
+    "targetOrientation": [
+     0,
+     0,
+     0,
+     1
+    ],
+    "fovy": 45,
+    "near": 0.5,
+    "far": 5000
+   },
+   "followMode": "follow-none",
+   "followTf": "map",
+   "scene": {},
+   "transforms": {
+    "frame:world": {
+     "visible": false
+    },
+    "frame:infrastructure_base": {
+     "visible": false
+    },
+    "frame:infrastructure_lidar": {
+     "visible": false
+    },
+    "frame:vehicle_base": {
+     "visible": false
+    },
+    "frame:vehicle_lidar": {
+     "visible": false
+    }
+   },
+   "topics": {
+    "/perception/global_trustworthiness/viz/ground_backdrop": {
+     "visible": true
+    },
+    "/infrastructure/lidar/points": {
+     "visible": true,
+     "colorField": "intensity",
+     "colorMode": "colormap",
+     "colorMap": "turbo",
+     "minValue": 0,
+     "maxValue": 75,
+     "pointSize": 2
+    },
+    "/vehicle/lidar/points": {
+     "visible": true,
+     "colorField": "intensity",
+     "colorMode": "flat",
+     "flatColor": "#7a7a7aff",
+     "pointSize": 2
+    },
+    "/infrastructure/local_trust_estimation/markers": {
+     "visible": false
+    },
+    "/local_trust_estimation/markers": {
+     "visible": false
+    },
+    "/infrastructure/gt/markers": {
+     "visible": false
+    },
+    "/vehicle/gt/markers": {
+     "visible": false
+    },
+    "/perception/global_trustworthiness/viz/scene_raw": {
+     "visible": false
+    },
+    "/perception/global_trustworthiness/viz/scene_trust": {
+     "visible": false
+    },
+    "/perception/global_trustworthiness/viz/ego_boxes": {
+     "visible": true
+    },
+    "/perception/global_trustworthiness/viz/peer_boxes": {
+     "visible": true
+    },
+    "/perception/global_trustworthiness/viz/fused_boxes_markers": {
+     "visible": true
+    }
+   },
+   "publish": {
+    "type": "point",
+    "poseTopic": "/move_base_simple/goal",
+    "pointTopic": "/clicked_point",
+    "poseEstimateTopic": "/initialpose",
+    "poseEstimateXDeviation": 0.5,
+    "poseEstimateYDeviation": 0.5,
+    "poseEstimateThetaDeviation": 0.26179939
+   },
+   "imageMode": {}
+  },
+  "Plot!trustscore": {
+   "title": "Vehicle (agent 2) reputation, as judged by the infrastructure ego",
+   "paths": [
+    {
+     "value": "/perception/global_trustworthiness/verdicts/agent_1.r_new",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "R(agent 2)"
+    }
+   ],
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showPlotValuesInLegend": true,
+   "isSynced": true,
+   "xAxisVal": "timestamp",
+   "sidebarDimension": 240,
+   "minYValue": 0,
+   "maxYValue": 1
+  },
+  "RawMessages!verdicts": {
+   "topicPath": "/perception/global_trustworthiness/verdicts/agent_1"
+  }
+ },
+ "globalVariables": {},
+ "userNodes": {},
+ "playbackConfig": {
+  "speed": 1
+ },
+ "layout": {
+  "direction": "row",
+  "first": "3D!scene01",
+  "second": {
+   "direction": "column",
+   "first": "Plot!trustscore",
+   "second": "RawMessages!verdicts",
+   "splitPercentage": 45
+  },
+  "splitPercentage": 62
+ }
+}

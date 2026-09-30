@@ -98,8 +98,9 @@ def _backcharge(entry: _Entry) -> float:
 class PendingVerdicts:
     """Per-engine ledger of deferred other_only verdicts, keyed (agent, track)."""
 
-    def __init__(self, deadline_flushes: int = T_DEADLINE_FLUSHES):
+    def __init__(self, deadline_flushes: int = T_DEADLINE_FLUSHES, support_threshold: float = None):
         self._deadline = int(deadline_flushes)
+        self._theta = support_threshold
         # agent_key -> {track_id -> _Entry}
         self._entries: dict = {}
 
@@ -151,7 +152,7 @@ class PendingVerdicts:
             e = entries.get(tid)
 
             # Corroborated -> settle correct, back-paying every prior held frame.
-            if is_corroborated(support):
+            if is_corroborated(support, self._theta):
                 if e is None:
                     delta.correct += credit                  # corroborated on first sight
                 elif e.expired:

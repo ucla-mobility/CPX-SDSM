@@ -56,6 +56,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -69,6 +70,11 @@ except ImportError:
 
 try:
     from sdsm_trust_perception.global_trust_perception.pipeline import sdsm_codec as codec
+    from sdsm_trust_perception.global_trust_perception.pipeline.caution_map import (
+        CautionMap,
+        Sightings,
+        conflicts,
+    )
     from sdsm_trust_perception.global_trust_perception.pipeline.persistent_reputation_tracker import (
         BATCH_SIZE,
         PersistentReputationTracker,
@@ -102,6 +108,7 @@ _VERDICT_NAME = {
 }
 
 DEFAULT_FLUSH_INTERVAL_S = 0.5
+_NODE_RE = re.compile(r'\{"event":"(?:TX|RX)","node":(\d+)')
 NEAR_RANGE_M = 150.0
 _CSV_FIELDS = [
     "judge_node", "sender_node", "msg_cnt", "sim_time",
@@ -111,7 +118,18 @@ _CSV_FIELDS = [
     "n_near", "n_near_admitted",
     "n_hidden", "n_hidden_solo", "n_hidden_admitted", "n_hidden_solo_admitted",
     "n_unverified", "n_near_unverified", "n_hidden_unverified", "n_hidden_solo_unverified",
-    "n_phantom_unverified",
+    "n_phantom_unverified", "n_strikes",
+]
+# One row per (judge, flush) when --caution-map is on: the judge's caution layer, scored against
+# ground truth (phantom / hidden-real ids). "hz" (hazard) = a reported phantom / hidden object the
+# judge's own path would actually hit within the look-ahead (plain footprint, no caution margin).
+_CAUTION_FIELDS = [
+    "judge_node", "sim_time", "advisory", "n_confirmed", "n_caution",
+    "n_caution_phantom", "n_caution_hidden", "n_caution_other",
+    "n_crit_caution", "n_crit_caution_phantom", "n_crit_caution_hidden", "n_crit_caution_other",
+    "n_crit_confirmed", "n_crit_caution_2s", "max_criticality",
+    "hz_hidden", "hz_hidden_confirmed", "hz_hidden_caution", "hz_hidden_none",
+    "hz_phantom", "hz_phantom_confirmed", "hz_phantom_caution", "hz_phantom_none",
 ]
 
 
@@ -136,9 +154,10 @@ class _Event:
     (see ReceivedSdsm.msg), built from one decoded JSONL line. No rosidl
     message needed here since nothing publishes/subscribes over ROS."""
 
-    __slots__ = ("is_rx", "node", "sim_time", "latency", "sender_node", "sdsm")
+    __slots__ = ("is_rx", "node", "sim_time", "latency", "sender_node", "sdsm", "local")
 
-    def __init__(self, is_rx, node, sim_time, latency, sender_node, sdsm):
+    def __init__(self, is_rx, node, sim_time, latency, sender_node, sdsm, local=None):
+        self.local = local
         self.is_rx = is_rx
         self.node = node
         self.sim_time = sim_time
@@ -164,7 +183,8 @@ def _event_from_line(line: str) -> Optional[_Event]:
     else:
         latency = 0.0
         sender_node = node
-    return _Event(is_rx, node, float(d["time"]), latency, sender_node, sdsm)
+    return _Event(is_rx, node, float(d["time"]), latency, sender_node, sdsm,
+                  d.get("local") if not is_rx else None)
 
 
 class _EgoState:
@@ -187,15 +207,26 @@ class _EgoState:
         self._self_heading: float = 360.0
         self._self_vel = (0.0, 0.0)
 
-    def update_from(self, msg, send_time: float) -> None:
-        raw = codec.get_global_positions_of(msg)
-        vel = codec.get_velocities_of(msg)
-        self.dims = codec.get_dims_of(msg)
-        self.headings = codec.get_headings_of(msg)
-        self.scores = codec.get_local_scores_of(msg)
-        self.labels = codec.get_labels_of(msg)
+    def update_from(self, msg, send_time: float, local=None) -> None:
+        if local:
+            # The vehicle's FULL local view (not the broadcast list cut at the object cap).
+            raw = [(float(o[1]), float(o[2]), 0.0) for o in local]
+            vel = [(0.0, 0.0) if o[4] <= -900 else (float(o[3]) * math.cos(o[4]), float(o[3]) * math.sin(o[4]))
+                   for o in local]
+            self.dims = [codec.SELF_DIMS_M[:2] + (0.0,) for _ in local]
+            self.headings = [360.0 if o[4] <= -900 else (90.0 - math.degrees(o[4])) % 360.0 for o in local]
+            self.scores = [1.0] * len(local)
+            self.labels = [codec.OBJ_TYPE_VEHICLE] * len(local)
+            self.object_ids = [int(o[0]) for o in local]
+        else:
+            raw = codec.get_global_positions_of(msg)
+            vel = codec.get_velocities_of(msg)
+            self.dims = codec.get_dims_of(msg)
+            self.headings = codec.get_headings_of(msg)
+            self.scores = codec.get_local_scores_of(msg)
+            self.labels = codec.get_labels_of(msg)
+            self.object_ids = codec.get_object_ids_of(msg)
         self.equipment = codec.get_equipment_type_of(msg)
-        self.object_ids = codec.get_object_ids_of(msg)
 
         # The judge's own vehicle is ego-known too. Its velocity and heading
         # come from its own motion between TXs (the wire carries none for the
@@ -230,13 +261,16 @@ class _JudgeState:
     module docstring) in place of the ROS wall clock."""
 
     def __init__(self, judge_id: int, db_path: str, flush_hz: float, deadline_s: float,
-                 high_trust: float, admission: str, persist: int, opp_range: float):
+                 high_trust: float, admission: str, persist: int, opp_range: float,
+                 extra: Optional[dict] = None, caution: Optional[CautionMap] = None):
         self.judge_id = judge_id
+        self.caution = caution
         self.reputation_db = PersistentReputationTracker(db_path)
         self.engine = TrustEngine(self.reputation_db, flush_hz=flush_hz,
                                   deadline_s=deadline_s, now=_FakeClock(1.0 / flush_hz),
                                   high_trust=high_trust, admission=admission,
-                                  contradiction_persist=persist, opportunity_range_m=opp_range)
+                                  contradiction_persist=persist, opportunity_range_m=opp_range,
+                                  **(extra or {}))
         self.flush_dt = 1.0 / flush_hz
         self.trackers: dict[int, Sort] = {}
         self.ego = _EgoState()
@@ -263,7 +297,14 @@ class TrustReplayer:
     def __init__(self, db_dir: Path, flush_interval_s: float = DEFAULT_FLUSH_INTERVAL_S,
                  deferred_deadline_s: float = T_DEADLINE_S, verbose: bool = False,
                  high_trust: float = HIGH_TRUST, admission: str = 'tiered',
-                 persist: int = 1, opp_range: float = OPPORTUNITY_RANGE_M):
+                 persist: int = 1, opp_range: float = OPPORTUNITY_RANGE_M,
+                 extra: Optional[dict] = None):
+        extra = dict(extra or {})
+        self.ignore_local = bool(extra.pop('ignore_local', False))
+        self.caution_on = bool(extra.pop('caution_map', False))
+        self.caution_margin = extra.pop('caution_margin', None)
+        self.caution_rows: list[dict] = []
+        self.extra = extra
         self.high_trust = high_trust
         self.admission = admission
         self.persist = persist
@@ -283,7 +324,10 @@ class TrustReplayer:
             js = _JudgeState(judge_id, db_path, flush_hz=1.0 / self.flush_interval_s,
                              deadline_s=self.deferred_deadline_s, high_trust=self.high_trust,
                              admission=self.admission, persist=self.persist,
-                             opp_range=self.opp_range)
+                             opp_range=self.opp_range, extra=self.extra,
+                             caution=(CautionMap(**({} if self.caution_margin is None
+                                                    else {'margin_m': self.caution_margin}))
+                                      if self.caution_on else None))
             self._judges[judge_id] = js
         return js
 
@@ -313,6 +357,7 @@ class TrustReplayer:
         labels_by_agent, object_ids_by_agent, equipment_by_agent = {}, {}, {}
         source_id_map, ref_pos_by_agent, tracks_by_agent = {}, {}, {}
         raw_msg_by_agent, sim_time_by_agent = {}, {}
+        velocities_by_agent = {}
 
         rx_by_sender: dict[int, _Event] = {}
         tx_event: Optional[_Event] = None
@@ -326,7 +371,8 @@ class TrustReplayer:
         # end) so views taken up to a bucket apart can be clustered spatially.
         t_ref = (js.current_bucket + 1) * self.flush_interval_s
         if tx_event is not None:
-            js.ego.update_from(tx_event.sdsm, tx_event.sim_time)
+            js.ego.update_from(tx_event.sdsm, tx_event.sim_time,
+                               None if self.ignore_local else tx_event.local)
         js.ego.align_to(t_ref)
 
         for sender_node, event in rx_by_sender.items():
@@ -346,6 +392,7 @@ class TrustReplayer:
             tracks = js.sort_for(sender_node).update(xy, vel, dim_arr)
 
             positions_by_agent[sender_node] = positions
+            velocities_by_agent[sender_node] = velocities
             dims_by_agent[sender_node] = dims
             headings_by_agent[sender_node] = headings
             labels_by_agent[sender_node] = codec.get_labels_of(msg)
@@ -398,9 +445,94 @@ class TrustReplayer:
             source_id = source_id_map[s.agent_id]
             js.reputation_db.record(source_id, s.r_new, js.frame_count, s.risk_persist)
             self._record_row(js, s, raw_msg_by_agent[s.agent_id], sim_time_by_agent[s.agent_id])
+        if js.caution is not None:
+            self._caution_step(js, stats, positions_by_agent, velocities_by_agent,
+                               object_ids_by_agent, t_ref)
 
         if js.frame_count % BATCH_SIZE == 0:
             js.reputation_db.flush(js.frame_count)
+
+    def _caution_step(self, js: _JudgeState, stats, pos_by, vel_by, oid_by, t_ref: float) -> None:
+        """Fold this flush into the judge's caution layer and score it against ground truth."""
+        if not js.ego.positions:
+            return
+        ego_xy = js.ego.positions[-1][:2]
+        ego_v = js.ego._self_vel
+
+        def gather(pairs) -> Sightings:
+            if not pairs:
+                return Sightings.empty()
+            return Sightings(
+                np.array([a for a, _ in pairs], dtype=int),
+                np.array([int(oid_by[a][i]) for a, i in pairs], dtype=int),
+                np.array([(pos_by[a][i][0], pos_by[a][i][1]) for a, i in pairs], dtype=float),
+                np.array([(vel_by[a][i][0], vel_by[a][i][1]) for a, i in pairs], dtype=float))
+
+        conf = gather([(s.agent_id, i) for s in stats for i in s.admitted])
+        unv = gather([(s.agent_id, i) for s in stats for i in s.unverified])
+        seen = (np.array([(p[0], p[1]) for p in js.ego.positions[:-1]], dtype=float)
+                if len(js.ego.positions) > 1 else None)
+        fm = js.caution.update(t_ref, ego_xy, ego_v, conf, unv, seen)
+
+        # Evaluation-only ground truth: phantom ids (own 900000+node, shared 950000) and hidden
+        # real obstacles (800000+k), all wrapped by the 16-bit object_id field.
+        hidden_base = 800000 % 65536
+
+        def kind(sender: int, oid: int) -> str:
+            if oid in ((900000 + sender) % 65536, 950000 % 65536):
+                return 'phantom'
+            if hidden_base <= oid < hidden_base + 100:
+                return 'hidden'
+            return 'other'
+
+        cnt = {'phantom': 0, 'hidden': 0, 'other': 0}
+        crit = {'phantom': 0, 'hidden': 0, 'other': 0}
+        marker_oids = set()
+        for m in fm.markers:
+            k = kind(m.sender, m.object_id)
+            cnt[k] += 1
+            crit[k] += int(m.critical)
+            marker_oids.add(m.object_id)
+        conf_oids = set(int(o) for o in conf.oid)
+
+        # Hazards: reported phantom / hidden objects whose closest approach to the judge's own
+        # path is inside the keep-out zone. Where did each end up: confirmed, caution, or absent?
+        cm = js.caution
+        hz = {'hidden': [0, 0, 0, 0], 'phantom': [0, 0, 0, 0]}   # total, confirmed, caution, none
+        seen_oids = set()
+        for sender, oids in oid_by.items():
+            idx = [i for i, o in enumerate(oids)
+                   if kind(sender, int(o)) != 'other' and int(o) not in seen_oids]
+            if not idx:
+                continue
+            xy = np.array([(pos_by[sender][i][0], pos_by[sender][i][1]) for i in idx], dtype=float)
+            v = np.array([(vel_by[sender][i][0], vel_by[sender][i][1]) for i in idx], dtype=float)
+            # Plain footprint: would the ego actually hit it, ignoring any caution margin?
+            hit, _, _ = conflicts(ego_xy, ego_v, xy, v, cm.half_len_m, cm.half_wid_m, cm.horizon_s)
+            for j, i in enumerate(idx):
+                o = int(oids[i])
+                seen_oids.add(o)
+                if not hit[j]:
+                    continue
+                k = kind(sender, o)
+                hz[k][0] += 1
+                hz[k][1 if o in conf_oids else 2 if o in marker_oids else 3] += 1
+
+        self.caution_rows.append({
+            "judge_node": js.judge_id, "sim_time": round(t_ref, 3), "advisory": fm.advisory,
+            "n_confirmed": len(conf), "n_caution": len(fm.markers),
+            "n_caution_phantom": cnt['phantom'], "n_caution_hidden": cnt['hidden'],
+            "n_caution_other": cnt['other'],
+            "n_crit_caution": sum(crit.values()), "n_crit_caution_phantom": crit['phantom'],
+            "n_crit_caution_hidden": crit['hidden'], "n_crit_caution_other": crit['other'],
+            "n_crit_confirmed": fm.n_critical_confirmed,
+            "n_crit_caution_2s": sum(1 for m in fm.markers if m.critical and m.ttc_s <= 2.0),
+            "max_criticality": round(max((m.criticality for m in fm.markers), default=0.0), 3),
+            "hz_hidden": hz['hidden'][0], "hz_hidden_confirmed": hz['hidden'][1],
+            "hz_hidden_caution": hz['hidden'][2], "hz_hidden_none": hz['hidden'][3],
+            "hz_phantom": hz['phantom'][0], "hz_phantom_confirmed": hz['phantom'][1],
+            "hz_phantom_caution": hz['phantom'][2], "hz_phantom_none": hz['phantom'][3],
+        })
 
     def _record_row(self, js: _JudgeState, s: FrameStats, msg, sim_time: float) -> None:
         n_matched = sum(1 for v in s.verdict if v == VERDICT_MATCHED)
@@ -430,7 +562,8 @@ class TrustReplayer:
         phantom_id = (900000 + s.agent_id) % 65536
 
         def is_phantom(oid: int) -> bool:
-            return oid % 65536 == phantom_id
+            # own phantom, or the colluding attackers' shared fake (id 950000)
+            return oid % 65536 in (phantom_id, 950000 % 65536)
         self.rows.append({
             "judge_node": js.judge_id,
             "sender_node": s.agent_id,
@@ -460,6 +593,7 @@ class TrustReplayer:
             "n_hidden_unverified": sum(1 for i in s.unverified if i in hidden_idx),
             "n_hidden_solo_unverified": sum(1 for i in s.unverified if i in solo_idx),
             "n_phantom_unverified": sum(1 for i in s.unverified if is_phantom(obj_ids[i])),
+            "n_strikes": s.strikes,
             "n_phantom": sum(1 for oid in obj_ids if is_phantom(oid)),
             "n_phantom_admitted": sum(1 for i in s.admitted if is_phantom(obj_ids[i])),
         })
@@ -478,13 +612,20 @@ class TrustReplayer:
 def replay_file(jsonl_path: Path, db_dir: Path, flush_interval_s: float,
                 deferred_deadline_s: float, verbose: bool,
                 high_trust: float = HIGH_TRUST, admission: str = 'tiered',
-                persist: int = 1, opp_range: float = OPPORTUNITY_RANGE_M) -> list[dict]:
+                persist: int = 1, opp_range: float = OPPORTUNITY_RANGE_M,
+                extra: Optional[dict] = None, judge_stride: int = 1, judge_rem: int = 0,
+                caution_rows: Optional[list] = None) -> list[dict]:
     replayer = TrustReplayer(db_dir, flush_interval_s, deferred_deadline_s, verbose, high_trust,
-                             admission, persist, opp_range)
+                             admission, persist, opp_range, extra)
     n_lines = n_events = n_errors = 0
     with jsonl_path.open("r", encoding="utf-8") as f:
         for line in f:
             n_lines += 1
+            if judge_stride > 1:
+                # Judges are independent: skip lines for unselected judges before any decoding.
+                m = _NODE_RE.match(line)
+                if m and int(m.group(1)) % judge_stride != judge_rem:
+                    continue
             try:
                 event = _event_from_line(line)
             except Exception as e:
@@ -497,6 +638,8 @@ def replay_file(jsonl_path: Path, db_dir: Path, flush_interval_s: float,
             n_events += 1
             replayer.on_event(event)
     replayer.finish()
+    if caution_rows is not None:
+        caution_rows.extend(replayer.caution_rows)
     print(f"  {n_lines} lines, {n_events} TX/RX events, {n_errors} decode errors, "
           f"{len(replayer.rows)} verdict rows, {len(replayer._judges)} judges")
     return replayer.rows
@@ -521,6 +664,32 @@ def main() -> int:
                     help="Flushes a contradiction must persist before it counts (strict_unverified/probabilistic)")
     ap.add_argument("--opportunity-range", type=float, default=OPPORTUNITY_RANGE_M,
                     help="Metres within which a witness could have seen an object (strict_unverified/probabilistic)")
+    ap.add_argument("--strike-penalty", type=float, default=0.0,
+                    help="strict_unverified: reputation taken per persistent, strongly contradicted object (0 = off)")
+    ap.add_argument("--strike-missed", type=float, default=2.0,
+                    help="Witness weight that must have missed an object for a strike")
+    ap.add_argument("--report-cap", type=int, default=0,
+                    help="Objects per message at which senders truncate (e.g. 16); a sender at the cap is not counted as missing objects beyond its farthest reported one")
+    ap.add_argument("--admit-judge-confirmed", action="store_true",
+                    help="Admit objects the judge itself sees even while the sender fails the gate")
+    ap.add_argument("--ignore-local", action="store_true",
+                    help="Use the judge's truncated broadcast list instead of its full local view (for comparison)")
+    ap.add_argument("--support-threshold", type=float, default=None,
+                    help="Peer reputation mass needed to corroborate (default 1.0); with --peer-cap 0.6, 1.5 needs 3 peers")
+    ap.add_argument("--strike-kinematic", action="store_true",
+                    help="Let implausible motion count toward a strike (off by default: misfires at density)")
+    ap.add_argument("--strike-missed-frac", type=float, default=0.0,
+                    help="Also require this fraction of the witness weight in range to have missed the object")
+    ap.add_argument("--peer-cap", type=float, default=1.0,
+                    help="Cap on the corroboration mass any one peer can contribute (1.0 = uncapped)")
+    ap.add_argument("--caution-map", action="store_true",
+                    help="strict_unverified: turn unverified objects into caution markers (potential critical "
+                         "vehicles with a larger keep-out) and write <stem>-caution.csv")
+    ap.add_argument("--caution-margin", type=float, default=None,
+                    help="Extra keep-out (m) around a caution marker (default 3.0)")
+    ap.add_argument("--judge-stride", type=int, default=1,
+                    help="Only replay judges with node %% stride == --judge-rem (independent judges; much faster on dense logs)")
+    ap.add_argument("--judge-rem", type=int, default=0)
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -542,9 +711,24 @@ def main() -> int:
         jsonl_path.stem.replace("-ros-events", "") + "-trust-verdicts.csv")
     db_dir = Path(args.db_dir) if args.db_dir else out_path.parent / "trust_reputation_db"
 
+    if args.caution_map and args.admission != "strict_unverified":
+        print("ERROR: --caution-map needs --admission strict_unverified", file=sys.stderr)
+        return 1
+    caution_rows: list = []
     print(f"Replaying {jsonl_path} ...")
     rows = replay_file(jsonl_path, db_dir, args.flush_interval, args.deferred_deadline, args.verbose,
-                       args.high_trust, args.admission, args.persist, args.opportunity_range)
+                       args.high_trust, args.admission, args.persist, args.opportunity_range,
+                       {'strike_penalty': args.strike_penalty, 'strike_missed_min': args.strike_missed,
+                        'peer_support_cap': args.peer_cap,
+                        'strike_missed_frac': args.strike_missed_frac,
+                        'support_threshold': args.support_threshold,
+                        'strike_use_kinematic': args.strike_kinematic,
+                        'report_cap': args.report_cap,
+                        'admit_judge_confirmed': args.admit_judge_confirmed,
+                        'ignore_local': args.ignore_local,
+                        'caution_map': args.caution_map,
+                        'caution_margin': args.caution_margin},
+                       args.judge_stride, args.judge_rem, caution_rows)
 
     if not rows:
         print("No verdict rows produced.", file=sys.stderr)
@@ -555,6 +739,13 @@ def main() -> int:
         w.writeheader()
         w.writerows(rows)
     print(f"  -> {out_path}")
+    if caution_rows:
+        cpath = out_path.with_name(out_path.name.replace("-trust-verdicts.csv", "") + "-caution.csv")
+        with cpath.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=_CAUTION_FIELDS)
+            w.writeheader()
+            w.writerows(caution_rows)
+        print(f"  -> {cpath}")
 
     n_total = len(rows)
     n_untrusted = sum(1 for r in rows if not r["trusted"])

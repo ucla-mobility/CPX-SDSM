@@ -1,0 +1,100 @@
+{
+  "configById": {
+    "3D!a7k2m91": {
+      "layers": {
+        "9f2c1de4-7a05-4bb1-9c3e-2d1f6a80b511": {
+          "visible": true,
+          "frameLocked": true,
+          "label": "Grid",
+          "instanceId": "9f2c1de4-7a05-4bb1-9c3e-2d1f6a80b511",
+          "layerId": "foxglove.Grid",
+          "size": 100,
+          "divisions": 20,
+          "lineWidth": 1,
+          "color": "#248eff",
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "order": 1
+        }
+      },
+      "cameraState": {
+        "perspective": true,
+        "distance": 90,
+        "phi": 55,
+        "thetaOffset": 0,
+        "targetOffset": [
+          0,
+          8,
+          0
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-none",
+      "followTf": "vehicle_lidar",
+      "scene": {},
+      "transforms": {},
+      "topics": {
+        "/vehicle/lidar/points": {
+          "visible": true,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "pointSize": 1.5
+        },
+        "/local_trust_estimation/markers": {
+          "visible": true
+        },
+        "/vehicle/gt/markers": {
+          "visible": false
+        },
+        "/perception/global_trustworthiness/viz/scene_raw": {
+          "visible": true
+        }
+      },
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "imageMode": {}
+    },
+    "RawMessages!b3n8w42": {
+      "topicPath": "/perception/global_trustworthiness/sdsm"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "first": "3D!a7k2m91",
+    "second": "RawMessages!b3n8w42"
+  }
+}

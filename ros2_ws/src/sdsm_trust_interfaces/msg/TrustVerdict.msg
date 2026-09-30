@@ -33,3 +33,5 @@ float32 incorrect       # weighted I this frame
 # === Per-detection verdict (length = the judged SDSM's objects array) ===
 uint8[] verdict         # one VERDICT_* per object, parallel to sdsm.objects
 bool[]  admitted         # per object: cleared the output tier policy?
+bool[]  unverified       # per object (strict_unverified only): trusted sender, nobody confirms or
+                         # contradicts it -> a CAUTION marker (see CautionMap.msg), not in `admitted`

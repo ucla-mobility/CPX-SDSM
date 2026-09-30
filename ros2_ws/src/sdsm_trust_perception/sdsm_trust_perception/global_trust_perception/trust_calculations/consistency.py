@@ -82,7 +82,8 @@ def pen(c: float) -> float:
 def corroboration_support(clusters: list,
                           reliability_by_key: dict,
                           scores_by_key: dict,
-                          ego_key: object) -> dict:
+                          ego_key: object,
+                          peer_cap: float = 1.0) -> dict:
     """Certainty-weighted reputation mass corroborating each detection.
 
     clusters           : [{stream_key: det_idx}] from the phase-1 fusion — at
@@ -111,17 +112,21 @@ def corroboration_support(clusters: list,
     for cluster in clusters:
         for key, det in cluster.items():
             peers = set(cluster) - {key, ego_key}
+            # peer_cap bounds what ONE peer can contribute, so a single (or a
+            # single colluding pair of) high-reputation peers cannot reach the
+            # threshold alone; 1.0 = uncapped (original behaviour).
             support.setdefault(key, {})[det] = sum(
-                reliability_by_key.get(p, 0.0)
-                * _certainty_of(scores_by_key, p, cluster[p])
+                min(reliability_by_key.get(p, 0.0)
+                    * _certainty_of(scores_by_key, p, cluster[p]), peer_cap)
                 for p in peers
             )
     return support
 
 
-def is_corroborated(support: float) -> bool:
-    """True iff peer reputation mass reaches the corroboration threshold."""
-    return support >= SUPPORT_THRESHOLD_THETA
+def is_corroborated(support: float, theta: float = None) -> bool:
+    """True iff peer reputation mass reaches the corroboration threshold (theta,
+    default SUPPORT_THRESHOLD_THETA)."""
+    return support >= (SUPPORT_THRESHOLD_THETA if theta is None else theta)
 
 
 def weighted_ego_consistency(

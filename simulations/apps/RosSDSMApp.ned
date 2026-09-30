@@ -82,6 +82,16 @@ simple RosSDSMApp extends DemoBaseApplLayer
         int hiddenObjects = default(0);
         int hiddenHostPeriod = default(2);
         double sensorRange @unit(m) = default(50m);
+        // Collusion: every phantom attacker reports the SAME static fake obstacle (id 950000)
+        // instead of its own phantom, so attackers can corroborate one another.
+        // Log the vehicle's FULL local object list (everything it currently knows, before the
+        // maxObjectsPerSdsm broadcast cap) in each TX event, so an offline judge can use the
+        // vehicle's real perception instead of its truncated broadcast.
+        bool logLocalView = default(false);
+        bool colludingPhantom = default(false);
+        // >0: the phantom is only reported during the first half of every period (seconds),
+        // an on-off attacker trying to dodge persistence rules.
+        double phantomFlickerPeriod @unit(s) = default(0s);
         double phantomOffsetDistance @unit(m) = default(0m);  // >0: fixed "phantom" distance from its sender (else random 20-80 m)
         bool   attackerPureMode       = default(false);     // true = attacker reports ONLY its fabrication
                                                              // (no legitimate objects), so its reputation

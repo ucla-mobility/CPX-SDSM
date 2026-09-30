@@ -142,6 +142,9 @@ private:
     std::string attackType_ = "phantom";
     double spoofJumpDistance_ = 150.0;
     double phantomOffsetDistance_ = 0.0;
+    bool colludingPhantom_ = false;
+    bool logLocalView_ = false;
+    double phantomFlickerPeriod_ = 0.0;
     int hiddenObjects_ = 0;
     int hiddenHostPeriod_ = 2;
     double sensorRange_ = 50.0;
@@ -342,6 +345,8 @@ private:
     static uint64_t s_redundantCount_;
     static uint64_t s_redundantTotal_;
     static long s_nextMessageId_;
+    struct SharedFake { bool set = false; double x = 0.0; double y = 0.0; };
+    static SharedFake s_sharedFake_;
     struct HiddenObject { int id; double x; double y; };
     static std::vector<HiddenObject> s_hiddenObjects_;
 
