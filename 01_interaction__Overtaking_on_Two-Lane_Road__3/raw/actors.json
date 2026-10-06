@@ -1,0 +1,152 @@
+[
+ {
+  "id": 370,
+  "type_id": "vehicle.tesla.model3",
+  "category": "vehicle",
+  "role_name": "hero_0",
+  "attributes": {
+   "generation": "1",
+   "number_of_wheels": "4",
+   "sticky_control": "true",
+   "object_type": "",
+   "color": "17,37,103",
+   "role_name": "hero_0"
+  },
+  "bbox_extent": [
+   2.3959,
+   1.0817,
+   0.7442
+  ],
+  "bbox_center_offset": [
+   0.0292,
+   -0.0,
+   0.7355
+  ],
+  "first_seen_frame": 34
+ },
+ {
+  "id": 371,
+  "type_id": "vehicle.tesla.model3",
+  "category": "vehicle",
+  "role_name": "hero_1",
+  "attributes": {
+   "generation": "1",
+   "number_of_wheels": "4",
+   "sticky_control": "true",
+   "object_type": "",
+   "color": "137,0,0",
+   "role_name": "hero_1"
+  },
+  "bbox_extent": [
+   2.3959,
+   1.0817,
+   0.7442
+  ],
+  "bbox_center_offset": [
+   0.0292,
+   0.0,
+   0.7355
+  ],
+  "first_seen_frame": 34
+ },
+ {
+  "id": 372,
+  "type_id": "vehicle.tesla.model3",
+  "category": "vehicle",
+  "role_name": "hero_2",
+  "attributes": {
+   "generation": "1",
+   "number_of_wheels": "4",
+   "sticky_control": "true",
+   "object_type": "",
+   "color": "180,180,180",
+   "role_name": "hero_2"
+  },
+  "bbox_extent": [
+   2.3959,
+   1.0817,
+   0.7442
+  ],
+  "bbox_center_offset": [
+   0.0292,
+   -0.0,
+   0.7355
+  ],
+  "first_seen_frame": 34
+ },
+ {
+  "id": 373,
+  "type_id": "vehicle.tesla.model3",
+  "category": "vehicle",
+  "role_name": "hero_3",
+  "attributes": {
+   "generation": "1",
+   "number_of_wheels": "4",
+   "sticky_control": "true",
+   "object_type": "",
+   "color": "44,44,44",
+   "role_name": "hero_3"
+  },
+  "bbox_extent": [
+   2.3959,
+   1.0817,
+   0.7442
+  ],
+  "bbox_center_offset": [
+   0.0292,
+   -0.0,
+   0.7355
+  ],
+  "first_seen_frame": 34
+ },
+ {
+  "id": 374,
+  "type_id": "walker.pedestrian.0001",
+  "category": "pedestrian",
+  "role_name": "entity_2",
+  "attributes": {
+   "generation": "1",
+   "gender": "female",
+   "age": "adult",
+   "is_invincible": "false",
+   "speed": "0.0",
+   "role_name": "entity_2"
+  },
+  "bbox_extent": [
+   0.1877,
+   0.1877,
+   0.93
+  ],
+  "bbox_center_offset": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "first_seen_frame": 34
+ },
+ {
+  "id": 375,
+  "type_id": "vehicle.audi.a2",
+  "category": "vehicle",
+  "role_name": "entity_1",
+  "attributes": {
+   "generation": "1",
+   "number_of_wheels": "4",
+   "sticky_control": "true",
+   "object_type": "",
+   "color": "255,255,255",
+   "role_name": "entity_1"
+  },
+  "bbox_extent": [
+   1.8527,
+   0.8943,
+   0.7745
+  ],
+  "bbox_center_offset": [
+   0.0,
+   0.0004,
+   0.7818
+  ],
+  "first_seen_frame": 34
+ }
+]

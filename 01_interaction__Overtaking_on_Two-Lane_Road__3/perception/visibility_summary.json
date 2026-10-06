@@ -1,0 +1,325 @@
+{
+  "note": "range = CPX_RECORD_RANGE around each ego; visible = >=1 semantic-LiDAR hit; 'hidden_but_seen_by_other_ego' = this ego has 0 hits while another ego has >=1 in the same tick (V2V could share it).",
+  "per_ego": {
+    "Vehicle 1": {
+      "Vehicle 2": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 7147,
+        "min_distance_m": 4.126,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "Vehicle 3": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 1177,
+        "min_distance_m": 8.328,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "Vehicle 4": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 64,
+        "min_distance_m": 16.288,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "entity_1": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 18,
+        "min_distance_m": 28.417,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "entity_2": {
+        "frames_in_range": 478,
+        "frames_visible": 443,
+        "frames_hidden": 35,
+        "frames_hidden_but_seen_by_other_ego": 35,
+        "first_visible_t": 0.55,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 13,
+        "min_distance_m": 32.513,
+        "occluders": {
+          "entity_1": 33,
+          "Vehicle 4": 35,
+          "Vehicle 3": 35
+        },
+        "seen_by_others": {
+          "Vehicle 2": 35,
+          "Vehicle 3": 26,
+          "Vehicle 4": 31
+        },
+        "seconds_hidden": 1.75,
+        "seconds_v2v_recoverable": 1.75
+      }
+    },
+    "Vehicle 2": {
+      "Vehicle 1": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 7145,
+        "min_distance_m": 4.128,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "Vehicle 3": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 7180,
+        "min_distance_m": 4.098,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "Vehicle 4": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 7117,
+        "min_distance_m": 4.148,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "entity_1": {
+        "frames_in_range": 478,
+        "frames_visible": 476,
+        "frames_hidden": 2,
+        "frames_hidden_but_seen_by_other_ego": 2,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 4581,
+        "min_distance_m": 5.008,
+        "occluders": {
+          "Vehicle 4": 2,
+          "Vehicle 3": 2
+        },
+        "seen_by_others": {
+          "Vehicle 1": 2,
+          "Vehicle 3": 2,
+          "Vehicle 4": 2
+        },
+        "seconds_hidden": 0.1,
+        "seconds_v2v_recoverable": 0.1
+      },
+      "entity_2": {
+        "frames_in_range": 478,
+        "frames_visible": 474,
+        "frames_hidden": 4,
+        "frames_hidden_but_seen_by_other_ego": 4,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 1364,
+        "min_distance_m": 2.613,
+        "occluders": {},
+        "seen_by_others": {
+          "Vehicle 1": 4,
+          "Vehicle 3": 4,
+          "Vehicle 4": 4
+        },
+        "seconds_hidden": 0.2,
+        "seconds_v2v_recoverable": 0.2
+      }
+    },
+    "Vehicle 3": {
+      "Vehicle 1": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 1784,
+        "min_distance_m": 7.281,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "Vehicle 2": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 7182,
+        "min_distance_m": 4.098,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "Vehicle 4": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 1100,
+        "min_distance_m": 8.608,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "entity_1": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 54,
+        "min_distance_m": 18.446,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "entity_2": {
+        "frames_in_range": 478,
+        "frames_visible": 463,
+        "frames_hidden": 15,
+        "frames_hidden_but_seen_by_other_ego": 15,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 24,
+        "min_distance_m": 22.913,
+        "occluders": {
+          "entity_1": 15,
+          "Vehicle 4": 15
+        },
+        "seen_by_others": {
+          "Vehicle 1": 6,
+          "Vehicle 2": 15,
+          "Vehicle 4": 9
+        },
+        "seconds_hidden": 0.75,
+        "seconds_v2v_recoverable": 0.75
+      }
+    },
+    "Vehicle 4": {
+      "Vehicle 1": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 47,
+        "min_distance_m": 15.232,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "Vehicle 2": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 7118,
+        "min_distance_m": 4.148,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "Vehicle 3": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 1611,
+        "min_distance_m": 7.561,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "entity_1": {
+        "frames_in_range": 478,
+        "frames_visible": 478,
+        "frames_hidden": 0,
+        "frames_hidden_but_seen_by_other_ego": 0,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 735,
+        "min_distance_m": 9.236,
+        "occluders": {},
+        "seen_by_others": {},
+        "seconds_hidden": 0.0,
+        "seconds_v2v_recoverable": 0.0
+      },
+      "entity_2": {
+        "frames_in_range": 478,
+        "frames_visible": 470,
+        "frames_hidden": 8,
+        "frames_hidden_but_seen_by_other_ego": 8,
+        "first_visible_t": 0.0,
+        "last_visible_t": 23.85,
+        "max_lidar_points": 70,
+        "min_distance_m": 12.871,
+        "occluders": {
+          "entity_1": 8
+        },
+        "seen_by_others": {
+          "Vehicle 1": 4,
+          "Vehicle 2": 8,
+          "Vehicle 3": 2
+        },
+        "seconds_hidden": 0.4,
+        "seconds_v2v_recoverable": 0.4
+      }
+    }
+  }
+}

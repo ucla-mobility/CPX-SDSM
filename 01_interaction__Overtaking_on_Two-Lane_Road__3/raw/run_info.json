@@ -1,0 +1,2 @@
+{"idx": "01", "scenario": "scenarioset/interaction/Overtaking_on_Two-Lane_Road/3", "observer_ego_index": 3, "ego_names": "Vehicle 1,Vehicle 2,Vehicle 3,Vehicle 4",
+ "planner": "tcp-vid", "results_tag": "cpx_episode_01", "max_seconds": 45, "gpu": 0, "port": 3440}

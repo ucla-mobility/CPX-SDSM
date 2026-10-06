@@ -1,0 +1,107 @@
+{
+  "town": "Town01",
+  "map_file": "map/Town01.xodr",
+  "scenario_name": "RouteScenario_07_placement",
+  "route_id": null,
+  "fixed_delta_seconds": 0.05,
+  "weather": {
+    "cloudiness": 0.0,
+    "fog_density": 18.0,
+    "fog_distance": 70.0,
+    "fog_falloff": 0.0,
+    "mie_scattering_scale": 0.0,
+    "precipitation": 15.0,
+    "precipitation_deposits": 25.0,
+    "rayleigh_scattering_scale": 0.033,
+    "scattering_intensity": 0.0,
+    "sun_altitude_angle": 20.0,
+    "sun_azimuth_angle": 210.0,
+    "wetness": 35.0,
+    "wind_intensity": 45.0
+  },
+  "egos": [
+    {
+      "index": 0,
+      "name": "Vehicle 1",
+      "actor_id": 370,
+      "type_id": "vehicle.tesla.model3",
+      "role_name": "hero_0"
+    },
+    {
+      "index": 1,
+      "name": "Vehicle 2",
+      "actor_id": 371,
+      "type_id": "vehicle.tesla.model3",
+      "role_name": "hero_1"
+    },
+    {
+      "index": 2,
+      "name": "Vehicle 3",
+      "actor_id": 372,
+      "type_id": "vehicle.tesla.model3",
+      "role_name": "hero_2"
+    },
+    {
+      "index": 3,
+      "name": "Vehicle 4",
+      "actor_id": 373,
+      "type_id": "vehicle.tesla.model3",
+      "role_name": "hero_3"
+    }
+  ],
+  "perception": {
+    "sensor": "sensor.lidar.ray_cast_semantic",
+    "mount_on_ego": {
+      "x": -0.5,
+      "y": 0.0,
+      "z": 1.9,
+      "channels": 64,
+      "range": 120.0,
+      "upper_fov": 2.0,
+      "lower_fov": -25.0,
+      "points_per_second": 1300000
+    },
+    "rotation_frequency_hz": 20.0,
+    "range_m": 100.0,
+    "visible_rule": "lidar_points >= 1 (3-D ray casting, physically occluded)",
+    "tcp_front_camera": {
+      "x": -1.5,
+      "y": 0.0,
+      "z": 2.0,
+      "fov": 100.0,
+      "width": 900,
+      "height": 256
+    },
+    "ego_frame": "CARLA ego frame: x forward, y right, z up (origin = vehicle actor origin)"
+  },
+  "lidar_npz_every_n_ticks": 2,
+  "semantic_tags": {
+    "0": "unlabeled",
+    "1": "building",
+    "2": "fence",
+    "3": "other",
+    "4": "pedestrian",
+    "5": "pole",
+    "6": "roadline",
+    "7": "road",
+    "8": "sidewalk",
+    "9": "vegetation",
+    "10": "vehicles",
+    "11": "wall",
+    "12": "trafficsign",
+    "13": "sky",
+    "14": "ground",
+    "15": "bridge",
+    "16": "railtrack",
+    "17": "guardrail",
+    "18": "trafficlight",
+    "19": "static",
+    "20": "dynamic",
+    "21": "water",
+    "22": "terrain"
+  },
+  "carla_recorder": "carla_recorder.log",
+  "wallclock_start": "2026-10-02 13:50:14",
+  "num_ticks": 478,
+  "wallclock_end": "2026-10-02 14:20:57"
+}
