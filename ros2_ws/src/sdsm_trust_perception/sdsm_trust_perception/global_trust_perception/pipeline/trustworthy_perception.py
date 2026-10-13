@@ -408,24 +408,25 @@ class TrustEngine:
         self._streaks[(tag, agent_id)] = cur
         return out
 
-    def _object_beliefs(self, agent_id, other_positions, kds, corroborated,
-                        R_old, cluster_of, witnesses):
-        """Per-object belief that the report is real, plus which are contradicted.
-
-        Corroborated objects are certain (1.0). Any other object gets
-        belief = R_old * kds * exp(-ABSENCE_K * missed), where `missed` is the
-        reputation weight of witnesses (the judge counts 1.0) within
-        OPPORTUNITY_RANGE_M of the object that did NOT report it (a witness that
-        reports anything within NEAR_REPORT_M of it is not counted as missing). It is
-        contradicted when that missed weight reaches CONTRADICTED_MISSED_MIN or
-        its motion is implausible (kds < KDS_IMPLAUSIBLE); an object nobody
-        could have seen is never contradicted.
+    def _missed_witnesses(self, agent_id, other_positions, kds, corroborated,
+                          cluster_of, witnesses):
+        """Per-object: is there ACTIVE evidence against this report -- reputation-
+        weighted witness mass (the judge counts 1.0) within OPPORTUNITY_RANGE_M of
+        the object that did NOT report it (a witness reporting anything within
+        NEAR_REPORT_M of it is not counted as missing), enough to reach
+        CONTRADICTED_MISSED_MIN -- or is its motion implausible (kds <
+        KDS_IMPLAUSIBLE)? Corroborated objects are never contradicted, and an
+        object nobody could have seen is never contradicted either (missed stays
+        0). Shared by _object_beliefs (the belief score below) and by the
+        deferred ledger (deferred.PendingVerdicts), so a report that is merely
+        uncorroborated -- never actively disproven, the structural fate of
+        anything only one sensor can ever reach -- doesn't drain its sender's
+        reputation forever just for staying unconfirmed; see deferred.py's
+        module docstring.
         """
-        beliefs, contradicted, missed_all, total_all = [], [], [], []
-        prior = min(max(R_old, 0.0), 1.0)
+        contradicted, missed_all, total_all = [], [], []
         for j, pos in enumerate(other_positions):
             if j in corroborated:
-                beliefs.append(1.0)
                 contradicted.append(False)
                 missed_all.append(0.0)
                 total_all.append(0.0)
@@ -446,10 +447,26 @@ class TrustEngine:
                                                 wxy[:, 1] - pos[1])) <= NEAR_REPORT_M:
                     continue
                 missed += w
-            beliefs.append(prior * kds[j] * math.exp(-ABSENCE_K * missed))
             contradicted.append(missed >= CONTRADICTED_MISSED_MIN or kds[j] < KDS_IMPLAUSIBLE)
             missed_all.append(missed)
             total_all.append(total)
+        return contradicted, missed_all, total_all
+
+    def _object_beliefs(self, agent_id, other_positions, kds, corroborated,
+                        R_old, cluster_of, witnesses):
+        """Per-object belief that the report is real, plus which are contradicted.
+
+        Corroborated objects are certain (1.0). Any other object gets
+        belief = R_old * kds * exp(-ABSENCE_K * missed) (see _missed_witnesses
+        for `missed` and `contradicted`).
+        """
+        contradicted, missed_all, total_all = self._missed_witnesses(
+            agent_id, other_positions, kds, corroborated, cluster_of, witnesses)
+        prior = min(max(R_old, 0.0), 1.0)
+        beliefs = [
+            1.0 if j in corroborated else prior * kds[j] * math.exp(-ABSENCE_K * missed_all[j])
+            for j in range(len(other_positions))
+        ]
         return beliefs, contradicted, missed_all, total_all
 
     def process_frame(self,
@@ -662,6 +679,16 @@ class TrustEngine:
             )
             support_max = max((support_by_det.get(j, 0.0) for j in other_only), default=0.0)
 
+            # Active-contradiction signal for the deferred ledger below (only
+            # computable where cluster_of/witnesses were built -- strict_unverified
+            # and probabilistic). Elsewhere, ledger_obs defaults every object to
+            # "contradicted", preserving this engine's original always-charge
+            # behavior for admission modes that never computed this signal.
+            missed_contra = None
+            if self._admission in ('probabilistic', 'strict_unverified'):
+                missed_contra, _, _ = self._missed_witnesses(
+                    agent_id, other_positions, kds, corroborated, cluster_of, witnesses)
+
             # --- STAGE 3 (consistency) ---------------------------------------
             matched_certainties = [
                 other_score_list[oi] * kds[oi] for _, oi in matched
@@ -684,7 +711,8 @@ class TrustEngine:
             if track_ids is not None:
                 ledger_obs = [
                     (track_ids[j], other_score_list[j], other_score_list[j] * kds[j],
-                     support_by_det.get(j, 0.0))
+                     support_by_det.get(j, 0.0),
+                     (missed_contra[j] if missed_contra is not None else True))
                     for j in other_only
                 ]
                 vindicated_tids = [track_ids[oi] for _, oi in matched]

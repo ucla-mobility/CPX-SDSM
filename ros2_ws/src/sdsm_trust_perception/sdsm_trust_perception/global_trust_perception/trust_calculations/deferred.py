@@ -19,12 +19,21 @@ sighting and:
   - corroborated in time (peer reputation mass reaches the threshold, or ego
     matches it) -> settle CORRECT, FULL per-frame back-pay of every held frame
     (the "good sensor in a bad spot" gets its full reward retroactively);
-  - deadline expires with no corroboration -> settle INCORRECT, back-charge
-    every held frame at pen(c); each subsequent uncorroborated frame then
-    charges pen(c) instantly (persistent-ghost drain). Nothing charged is ever
-    refunded: corroboration arriving after expiry stops the billing but does
-    not return it, so a track that sat a whole grace window uncorroborated
-    stays net-punished for it;
+  - deadline expires with no corroboration -> settle INCORRECT ONCE, back-
+    charging every held frame at pen(c) (the track has had its fair window and
+    still has nobody backing it up -- this one charge stands regardless of what
+    happens next). Nothing charged is ever refunded: corroboration arriving
+    after expiry stops the billing but does not return it, so a track that sat
+    a whole grace window uncorroborated stays net-punished for it;
+  - PAST that point, each subsequent still-uncorroborated frame charges
+    pen(c) again ONLY IF it is also actively CONTRADICTED that frame (real
+    witness-mass in range that did not report it, or implausible motion) --
+    a persistent ghost usually keeps drawing that evidence and keeps paying
+    for it, but a report that is merely never corroborated (the structural
+    fate of anything only one sensor can ever reach, like a permanently
+    occluded real object) stops draining its sender once its one fair charge
+    has landed, instead of being billed every frame forever for something
+    nobody has actually disproven;
   - track dies still uncorroborated, having outlived the deadline -> settle
     INCORRECT with the same back-charge; a track that dies inside the grace
     window is forgiven (see the death rule below).
@@ -112,7 +121,7 @@ class PendingVerdicts:
         """
         Advance one agent's ledger by a frame and return the verdict deltas.
 
-        other_only     : iterable of (track_id, certainty, credit, support)
+        other_only     : iterable of (track_id, certainty, credit, support, contradicted)
                          for this agent's other_only detections this frame.
                          `certainty` is the raw local certainty and drives
                          every INCORRECT-side amount (_backcharge, pen(c)) --
@@ -123,7 +132,11 @@ class PendingVerdicts:
                          kinematically implausible earns less reward if it
                          turns out genuine, without earning a softer penalty
                          if it turns out to be a ghost. The deadline clock
-                         starts at the FIRST sighting.
+                         starts at the FIRST sighting. `contradicted` is
+                         whether there is ACTIVE evidence against this report
+                         this frame (reputation-weighted witness mass in range
+                         that did not report it, or implausible motion) -- see
+                         "merely uncorroborated vs. contradicted" below.
         vindicated_tids : track_ids that became ego-matched this frame. This
                          frame's credit is already given by the matched path, so
                          a vindicated pending track back-pays only its PRIOR held
@@ -136,7 +149,7 @@ class PendingVerdicts:
         delta = LedgerDelta()
         entries = self._entries.setdefault(agent_key, {})
         vindicated = set(vindicated_tids)
-        active = {tid for tid, _, _, _ in other_only} | vindicated
+        active = {tid for tid, _, _, _, _ in other_only} | vindicated
 
         # 1. Vindication: previously pending, now ego-matched.
         for tid in vindicated:
@@ -146,7 +159,7 @@ class PendingVerdicts:
                 delta.settled_correct += 1
 
         # 2. This frame's other_only detections.
-        for tid, c, credit, support in other_only:
+        for tid, c, credit, support, contradicted in other_only:
             c = _clip01(c)
             credit = _clip01(credit)
             e = entries.get(tid)
@@ -171,8 +184,14 @@ class PendingVerdicts:
                                       first_frame=frame_idx)
                 delta.pending += 1
             elif e.expired:
-                delta.incorrect += pen(c)                    # past deadline: charge every frame
-                delta.settled_incorrect += 1
+                if contradicted:
+                    # Still being actively disproven past its one fair charge: keep paying.
+                    delta.incorrect += pen(c)
+                    delta.settled_incorrect += 1
+                else:
+                    # Merely uncorroborated, not contradicted: hold, charge nothing this
+                    # frame. Stays open -- a later contradicted frame still charges then.
+                    delta.pending += 1
             else:
                 e.n_pending += 1
                 e.sum_certainty += c

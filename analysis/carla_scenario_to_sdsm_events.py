@@ -41,6 +41,7 @@ import json
 import math
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 
 ORIGIN_LAT_DEG = 34.0689
 ORIGIN_LON_DEG = -118.4452
@@ -158,7 +159,7 @@ def build_sdsm_dict(node: int, msg_cnt: int, ego_truth: dict, sightings: list[di
     }
 
 
-def convert(scenario_dir: Path, out_path: Path) -> dict:
+def convert(scenario_dir: Path, out_path: Path, cap: Optional[int] = None) -> dict:
     meta = load_meta(scenario_dir)
     egos = meta["egos"]
     node_of_actor = {e["actor_id"]: e["index"] for e in egos}
@@ -192,7 +193,17 @@ def convert(scenario_dir: Path, out_path: Path) -> dict:
             by_frame_ego[(frame, ego_index)].append({
                 "raw_id": raw_id,
                 "ped_actor_id": ped_actor_id,
+                "distance_m": float(row["distance_m"]),
             })
+
+    if cap:
+        # Periodic's default object-selection rule (RosSDSMApp.cc): sort every
+        # currently-visible sighting by distance and keep only the nearest `cap`
+        # of them -- the rest are dropped from that frame's broadcast entirely,
+        # exactly as a real distance-topK sender would never pack them.
+        for key, sightings in by_frame_ego.items():
+            sightings.sort(key=lambda s: s["distance_m"])
+            by_frame_ego[key] = sightings[:cap]
 
     msg_cnt_by_node = defaultdict(int)
     n_tx = 0
@@ -240,15 +251,18 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scenario_dir", type=Path, help="CP-X CARLA scenario export directory")
     ap.add_argument("--out", type=Path, help="Output *-ros-events.jsonl path")
+    ap.add_argument("--cap", type=int, default=None,
+                     help="Periodic's distance-topK object cap per message (e.g. 16 = the real "
+                          "default maxObjectsPerSdsm). Omit for uncapped (report everything visible).")
     args = ap.parse_args()
 
     out_path = args.out or (args.scenario_dir / "derived" / "carla-r0-ros-events.jsonl")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    stats = convert(args.scenario_dir, out_path)
+    stats = convert(args.scenario_dir, out_path, cap=args.cap)
     print(f"Wrote {out_path}")
     print(f"  frames={stats['n_frames']} nodes={stats['nodes']} "
-          f"tx_events={stats['n_tx']} rx_events={stats['n_rx']}")
+          f"tx_events={stats['n_tx']} rx_events={stats['n_rx']} cap={args.cap or 'none'}")
     print(f"  pedestrian: CARLA actor_id={stats['ped_actor_id']} -> wire object_id={stats['ped_wire_id']} "
           f"(falls in replay_trust_verdicts.py's hidden-real id range)")
     return 0
